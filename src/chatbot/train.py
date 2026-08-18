@@ -4,6 +4,7 @@ from time import perf_counter
 
 import torch
 
+from chatbot.config import GPTConfig
 from chatbot.model import GPT
 from chatbot.tokenizer import BPETokenizer
 
@@ -167,14 +168,15 @@ def main():
     data = torch.tensor(token_ids, dtype=torch.long, device=device)
     train_data, val_data = split_data(data)
 
-    model = GPT(
+    model_config = GPTConfig(
         vocab_size=vocab_size,
         block_size=block_size,
         n_embed=n_embed,
-        num_heads=num_heads,
+        n_head=num_heads,
         n_layer=n_layers,
         dropout=dropout,
-    ).to(device)
+    )
+    model = GPT(model_config).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, fused=(device == "cuda"))
 

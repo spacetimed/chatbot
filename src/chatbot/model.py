@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from chatbot.config import GPTConfig
+
 
 class SingleHeadAttention(nn.Module):
     tril: torch.Tensor
@@ -98,37 +100,33 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(
-            self, 
-            vocab_size, 
-            block_size, 
-            n_embed, 
-            num_heads, 
-            n_layer, 
-            dropout=0.0
-        ):
+    def __init__(self, config: GPTConfig):
         super().__init__()
 
         # constants
-        self.vocab_size = vocab_size
-        self.block_size = block_size
-        self.n_embed = n_embed
-        self.num_heads = num_heads
-        self.n_layer = n_layer
-        self.dropout = dropout
+        self.config = config
+        self.vocab_size = config.vocab_size
+        self.block_size = config.block_size
+        self.n_embed = config.n_embed
+        self.num_heads = config.n_head
+        self.n_layer = config.n_layer
+        self.dropout = config.dropout
 
         # embedding tables
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
-        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.token_embedding_table = nn.Embedding(self.vocab_size, self.n_embed)
+        self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
         self.blocks = nn.Sequential(
-            *[Block(block_size, n_embed, num_heads, dropout) for _ in range(n_layer)]
+            *[
+                Block(self.block_size, self.n_embed, self.num_heads, self.dropout)
+                for _ in range(self.n_layer)
+            ]
         )
 
         # final normalization + vocab projection
-        self.ln_f = nn.LayerNorm(n_embed)
-        self.lm_head = nn.Linear(n_embed, vocab_size)
+        self.ln_f = nn.LayerNorm(self.n_embed)
+        self.lm_head = nn.Linear(self.n_embed, self.vocab_size)
 
     def forward(self, idx, targets=None):
         _, T = idx.shape

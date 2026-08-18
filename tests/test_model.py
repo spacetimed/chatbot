@@ -1,4 +1,6 @@
 import torch
+
+from chatbot.config import GPTConfig
 from chatbot.model import GPT
 
 # basic low-compute tests to ensure the model is functional
@@ -6,14 +8,15 @@ from chatbot.model import GPT
 def test_model():
 
     torch.manual_seed(1337)
-    model = GPT(
+    config = GPTConfig(
         vocab_size=64,
         block_size=16,
         n_embed=32,
-        num_heads=4,
+        n_head=4,
         n_layer=2,
         dropout=0.0,
     )
+    model = GPT(config)
     tokens = torch.randint(0, 64, (2, 9)) # 2x9 containing rand int [0,64)
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
@@ -32,14 +35,15 @@ def test_force_overfit():
     # Force the model to overfit one batch; ensure loss drops substantially overall.
 
     torch.manual_seed(1337)
-    model = GPT(
+    config = GPTConfig(
         vocab_size=64,
         block_size=16,
         n_embed=32,
-        num_heads=4,
+        n_head=4,
         n_layer=2,
         dropout=0.0,
     )
+    model = GPT(config)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
 

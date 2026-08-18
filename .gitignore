@@ -4,6 +4,7 @@ todo.txt
 .env
 .env.*
 datasets/*
+references/
 
 # bloat
 __pycache__

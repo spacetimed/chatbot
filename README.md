@@ -2,6 +2,17 @@
 
 An educational LLM which visualizes different stages of the LLM! Built with both privacy and education in mind.
 
+# Roadmap
+
+**Phase 0**
+- Create the project's environment (`pyproject.toml`, `pytest`, etc.)
+- Import my decoder-only GPT from `gradcore/`, and get the basics working
+- Some small smoke tests
+
+**Phase 1**
+- Mold the model in the direction of GPT-2. Implementations include:
+    - 
+
 ## Brainstorming
 
 I plan to include as much of the stuff listed below in my project as I can. There's a lot I really want to learn, so I'm using this project as an opportunity to do just that.
@@ -72,3 +83,8 @@ Testing / reliability
 For this project, my reliance on AI tools is very constrained. AI tools will be used as bounded engineering assistants, rather than autonomous developers. 
 
 All code and architectural decisions will be primarily my own. I'm using this to learn.
+
+## References
+- https://github.com/karpathy/build-nanogpt
+- *Language Models are Unsupervised Multitask Learners* 
+- *Attention Is All You Need*
