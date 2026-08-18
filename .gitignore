@@ -1,0 +1,13 @@
+# personal files
+MISC.md
+todo.txt
+.env
+.env.*
+
+# bloat
+__pycache__
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.egg-info/

@@ -1,12 +1,14 @@
 # chatbot
 
----
+An educational LLM which visualizes different stages of the LLM! Built with both privacy and education in mind.
 
-My goal for this project is to build, train, serve, and deploy a small GPT-like language model. This document marks the beginning of the journey.
+## Brainstorming
 
-**Project components (initial brainstorming)**
+I plan to include as much of the stuff listed below in my project as I can. There's a lot I really want to learn, so I'm using this project as an opportunity to do just that.
 
 Model / ML
+- Privacy-focused deployment
+- Graphic to visualize LLM computation (like a verbose ChatGPT lol)
 - Re-use and substantially improve my from-scratch GPT
 - Conversational/instructional fine-tuning
 - Determine appropriate model size and training corpus
@@ -65,8 +67,8 @@ Testing / reliability
 - Load testing
 - Failure testing for queue/worker/model-service failures
 
-**Note about AI usage**
+## Note about AI usage
 
-For this project, I want to keep my reliance on AI tools constrained. AI tools will be used as bounded engineering assistants rather than autonomous developers. 
+For this project, my reliance on AI tools is very constrained. AI tools will be used as bounded engineering assistants, rather than autonomous developers. 
 
-I will hold ownership of the system design, technical decisions, integration, testing, etc. Code will be primarily my own; the goal of this project is learning.
+All code and architectural decisions will be primarily my own. I'm using this to learn.
