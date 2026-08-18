@@ -1,0 +1,9 @@
+run: 2026-08-18T15:36:13
+device: mps
+parameters: 136832
+vocab_size: 256
+hyperparameters: batch_size=16, block_size=64, tokenizer_vocab_size=256, n_embed=64, num_heads=4, n_layers=2, dropout=0.15, lr=0.0003, max_iters=100, eval_interval=25, eval_iters=10
+losses: train=3.1260, val=3.1001
+elapsed: 5s (5.28s)
+checkpoint: checkpoints/gplato.pt
+

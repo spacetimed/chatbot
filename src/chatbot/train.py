@@ -15,21 +15,23 @@ log_path = Path("logs/gplato_train.log")
 seed = 1337
 
 # hyperparameters -----
-batch_size = 128
-block_size = 256
-tokenizer_vocab_size = 512
-n_embed = 256
-num_heads = 8
-n_layers = 6
+batch_size = 16
+block_size = 64
+tokenizer_vocab_size = 256
+n_embed = 64
+num_heads = 4
+n_layers = 2
+
 lr = 3e-4
 
 dropout = 0.15
 
-max_iters = 5_000
-eval_interval = 250
-eval_iters = 100
+max_iters = 100
+eval_interval = 25
+eval_iters = 10
 
-gen_tokens = 400
+gen_tokens = 100
+
 temperature = 0.8  # soften sampling
 # ---------------------
 

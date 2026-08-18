@@ -3,6 +3,7 @@ MISC.md
 todo.txt
 .env
 .env.*
+datasets/*
 
 # bloat
 __pycache__
