@@ -4,9 +4,13 @@ import torch.nn.functional as F
 
 from chatbot.config import GPTConfig
 
+
 # start vectorized attention write to prep for GPT-2
 class CausalSelfAttention(nn.Module):
-    def __init__(self, config: GPTConfig) -> None:
+    def __init__(
+        self,
+        config: GPTConfig,
+    ) -> None:
         super().__init__()
 
         self.config = config
@@ -42,8 +46,10 @@ class CausalSelfAttention(nn.Module):
             mask.view(1, 1, config.block_size, config.block_size),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
         # vectorized QKV summary:
         #   start with [B,T,C] (each (b,t) position contains an n_embed vector)
         #   pass into linear layer to produce [B,T,3C]
@@ -116,40 +122,75 @@ class CausalSelfAttention(nn.Module):
         return out
 
 
-class FeedForward(nn.Module):
-    def __init__(self, n_embed, dropout=0.0):
+# replace old FeedForward class
+class MLP(nn.Module):
+    def __init__(
+        self,
+        config: GPTConfig,
+    ) -> None:
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embed, 4 * n_embed),
-            nn.ReLU(),
-            nn.Linear(4 * n_embed, n_embed),
-            nn.Dropout(dropout),
+
+        # fully-connected expansion layer: expands each token's hidden representation from C -> 4C features
+        # [B,T,C] -> [B,T,4C]
+        self.c_fc = nn.Linear(
+            in_features=config.n_embed,
+            out_features=4 * config.n_embed,
         )
 
-    def forward(self, x):
-        # applies the same MLP independently to every (b,t) vector
-        return self.net(x)
+        # non-linear transformation to each of the 4C features
+        # approximate tanh to match GPT-2's original GELU calc
+        self.gelu = nn.GELU(approximate="tanh")
+
+        # output projection layer (compress 4C dim back to C)
+        # [B,T,4C] -> [B,T,C]
+        self.c_proj = nn.Linear(
+            in_features=4 * config.n_embed,
+            out_features=config.n_embed,
+        )
+
+        # random zeroing for training
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        # apply the layers/transformations above
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+
+        return x
 
 
 class Block(nn.Module):
-    def __init__(self, config: GPTConfig):
+    def __init__(
+        self,
+        config: GPTConfig,
+    ) -> None:
         super().__init__()
 
         self.sa = CausalSelfAttention(config)
-        self.ffwd = FeedForward(config.n_embed, config.dropout)
+        self.mlp = MLP(config)
 
         self.ln1 = nn.LayerNorm(config.n_embed)
         self.ln2 = nn.LayerNorm(config.n_embed)
 
-    def forward(self, x):
-        # forward pass remains unchanged for vectorized attn
+    def forward(
+        self,
+        x,
+    ) -> torch.Tensor:
         x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+        x = x + self.mlp(self.ln2(x))
         return x
 
 
 class GPT(nn.Module):
-    def __init__(self, config: GPTConfig):
+    def __init__(
+        self,
+        config: GPTConfig,
+    ) -> None:
         super().__init__()
 
         # constants
@@ -174,15 +215,23 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(self.n_embed)
         self.lm_head = nn.Linear(self.n_embed, self.vocab_size)
 
-    def forward(self, idx, targets=None):
+    def forward(
+        self,
+        idx,
+        targets=None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         _, T = idx.shape
 
         if T > self.block_size:
-            raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
+            raise ValueError(
+                f"sequence length {T} exceeds block_size {self.block_size}"
+            )
 
         # idx: [B,T]
         tok_emb = self.token_embedding_table(idx)  # [B,T,C]
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))  # [T,C]
+        pos_emb = self.position_embedding_table(
+            torch.arange(T, device=idx.device)
+        )  # [T,C]
 
         x = tok_emb + pos_emb  # [B,T,C]
         x = self.blocks(x)  # [B,T,C]
@@ -201,7 +250,12 @@ class GPT(nn.Module):
         return logits, loss
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0):
+    def generate(
+        self,
+        idx,
+        max_new_tokens,
+        temperature=1.0,
+    ) -> torch.Tensor:
         if temperature <= 0:
             raise ValueError("temperature must be positive")
 

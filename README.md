@@ -10,7 +10,10 @@ An educational LLM which visualizes different stages of the LLM! Built with both
 - Some small smoke tests
 
 **Phase 1**
-- Mold the model in the direction of GPT-2. Implementations include:
+- Mold the model in the direction of GPT-2. Implementations done:
+    - Abstracted configuration into `GPTConfig`
+    - Vectorized causal self-attention in `CausalSelfAttention` (removed `SingleHeadAttention`, `MultiHeadAttention`)
+    - Added `MLP` with tanh-approximation GELU (same as GPT-2) (removed `FeedForward`)
 
 ## Brainstorming
 
