@@ -31,6 +31,7 @@ class CausalSelfAttention(nn.Module):
 
         # 1 output projection
         self.c_proj = nn.Linear(config.n_embed, config.n_embed)
+        self.c_proj.SCALE_RESIDUAL = True
 
         # separate dropout modules for clarity
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -143,6 +144,7 @@ class MLP(nn.Module):
             in_features=4 * config.n_embed,
             out_features=config.n_embed,
         )
+        self.c_proj.SCALE_RESIDUAL = True
 
         # random zeroing for training
         self.dropout = nn.Dropout(config.dropout)
@@ -199,7 +201,7 @@ class GPT(nn.Module):
         self.dropout = config.dropout
 
         # embedding tables
-        self.token_embedding_table = nn.Embedding(self.vocab_size, self.n_embed)  # [V,C]
+        self.token_embedding_table = nn.Embedding(self.vocab_size, self.n_embed)  # weight [V,C]
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
@@ -207,12 +209,43 @@ class GPT(nn.Module):
 
         # final normalization + vocab projection
         self.ln_f = nn.LayerNorm(self.n_embed)
-        self.lm_head = nn.Linear(self.n_embed, self.vocab_size, bias=False)  # [V,C]
+        self.lm_head = nn.Linear(self.n_embed, self.vocab_size, bias=False)  # weight [V,C]
 
         # share the [V,C] weight matrix between token embedding and output projection
-        # gpt-2 does this (i think) because the input and output sides refer to the same vocabulary
-        # and because sharing the weights lowers params by a lot
+        # gpt-2 does this bc the input and output sides refer to same vocabulary
+        #  and sharing the weights lowers params by a lot!
         self.lm_head.weight = self.token_embedding_table.weight
+
+        self.apply(self._init_weights)
+
+    def _init_weights(
+        self,
+        module: nn.Module,
+    ) -> None:
+
+        if isinstance(module, nn.Linear):
+            std = 0.02  # gpt-2
+
+            # 1/ √(2*number of layers)
+            # scale residual-output projections to keep accumulated variance tame
+            if getattr(module, "SCALE_RESIDUAL", False):
+                std *= (2 * self.config.n_layer) ** -0.5
+
+            nn.init.normal_(
+                module.weight,
+                mean=0.0,
+                std=std,
+            )
+
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(
+                module.weight,
+                mean=0.0,
+                std=0.02,
+            )
 
     def forward(
         self,
