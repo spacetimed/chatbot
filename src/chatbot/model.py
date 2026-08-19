@@ -36,9 +36,7 @@ class CausalSelfAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.residual_dropout = nn.Dropout(config.dropout)
 
-        mask = torch.tril(
-            torch.ones(config.block_size, config.block_size, dtype=torch.bool)
-        )
+        mask = torch.tril(torch.ones(config.block_size, config.block_size, dtype=torch.bool))
 
         # 4 dimensional mask: [1,1,block_size,block_size]
         self.register_buffer(
@@ -63,9 +61,7 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.shape  # [B,T,C] = [batch, token, n_embed]
 
         if T > self.block_size:
-            raise ValueError(
-                f"sequence length {T} exceeds block_size {self.block_size}"
-            )
+            raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
 
         # concatenated QKV vector for each (b,t) position after the linear layer.
         qkv = self.c_attn(x)  # [B,T,3C]
@@ -203,7 +199,7 @@ class GPT(nn.Module):
         self.dropout = config.dropout
 
         # embedding tables
-        self.token_embedding_table = nn.Embedding(self.vocab_size, self.n_embed)
+        self.token_embedding_table = nn.Embedding(self.vocab_size, self.n_embed)  # [V,C]
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
@@ -211,7 +207,12 @@ class GPT(nn.Module):
 
         # final normalization + vocab projection
         self.ln_f = nn.LayerNorm(self.n_embed)
-        self.lm_head = nn.Linear(self.n_embed, self.vocab_size)
+        self.lm_head = nn.Linear(self.n_embed, self.vocab_size, bias=False)  # [V,C]
+
+        # share the [V,C] weight matrix between token embedding and output projection
+        # gpt-2 does this (i think) because the input and output sides refer to the same vocabulary
+        # and because sharing the weights lowers params by a lot
+        self.lm_head.weight = self.token_embedding_table.weight
 
     def forward(
         self,
@@ -221,15 +222,11 @@ class GPT(nn.Module):
         _, T = idx.shape
 
         if T > self.block_size:
-            raise ValueError(
-                f"sequence length {T} exceeds block_size {self.block_size}"
-            )
+            raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
 
         # idx: [B,T]
         tok_emb = self.token_embedding_table(idx)  # [B,T,C]
-        pos_emb = self.position_embedding_table(
-            torch.arange(T, device=idx.device)
-        )  # [T,C]
+        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))  # [T,C]
 
         x = tok_emb + pos_emb  # [B,T,C]
         x = self.blocks(x)  # [B,T,C]

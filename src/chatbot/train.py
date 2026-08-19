@@ -82,9 +82,7 @@ def get_batch(split, train_data, val_data, block_size, batch_size, device):
 
 
 @torch.no_grad()
-def estimate_loss(
-    model, train_data, val_data, block_size, batch_size, device, eval_iters
-):
+def estimate_loss(model, train_data, val_data, block_size, batch_size, device, eval_iters):
     out = {}
     was_training = model.training
     model.eval()
@@ -92,9 +90,7 @@ def estimate_loss(
     for split in ["train", "val"]:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            xb, yb = get_batch(
-                split, train_data, val_data, block_size, batch_size, device
-            )
+            xb, yb = get_batch(split, train_data, val_data, block_size, batch_size, device)
             _, loss = model(xb, yb)
             losses[k] = loss.item()
         out[split] = losses.mean().item()
@@ -142,9 +138,7 @@ def log_run(path, elapsed_seconds, device, n_params, vocab_size, losses):
             f"eval_iters={eval_iters}\n"
         )
         f.write(f"losses: train={losses['train']:.4f}, val={losses['val']:.4f}\n")
-        f.write(
-            f"elapsed: {format_duration(elapsed_seconds)} ({elapsed_seconds:.2f}s)\n"
-        )
+        f.write(f"elapsed: {format_duration(elapsed_seconds)} ({elapsed_seconds:.2f}s)\n")
         f.write(f"checkpoint: {checkpoint_path}\n\n")
 
 
@@ -231,9 +225,7 @@ def main():
                 f"{' | saved best' if saved_best else ''}"
             )
 
-        xb, yb = get_batch(
-            "train", train_data, val_data, block_size, batch_size, device
-        )
+        xb, yb = get_batch("train", train_data, val_data, block_size, batch_size, device)
         _, loss = model(xb, yb)
 
         optimizer.zero_grad(set_to_none=True)
@@ -272,18 +264,14 @@ def main():
 
     print(f"\nsaved best checkpoint: {checkpoint_path}")
     print(f"best step: {best_step} | best val loss: {best_val_loss:.4f}")
-    print(
-        f"time taken to train: {format_duration(elapsed_seconds)} ({elapsed_seconds:.2f}s)"
-    )
+    print(f"time taken to train: {format_duration(elapsed_seconds)} ({elapsed_seconds:.2f}s)")
 
     log_run(log_path, elapsed_seconds, device, n_params, vocab_size, best_losses)
     print(f"logged run: {log_path}")
 
     context_ids = tokenizer.encode("\n")
     context = torch.tensor([context_ids], dtype=torch.long, device=device)
-    generated = model.generate(
-        context, max_new_tokens=gen_tokens, temperature=temperature
-    )
+    generated = model.generate(context, max_new_tokens=gen_tokens, temperature=temperature)
     print("\n--- sample ---")
     print(tokenizer.decode(generated[0].tolist()))
 

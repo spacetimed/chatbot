@@ -64,24 +64,17 @@ class BPETokenizer:
         return {
             "type": "bpe",
             "vocab_size": self.vocab_size,
-            "merges": [
-                {"pair": list(pair), "new_id": new_id}
-                for pair, new_id in self.merges.items()
-            ],
+            "merges": [{"pair": list(pair), "new_id": new_id} for pair, new_id in self.merges.items()],
         }
 
     @classmethod
     def from_dict(cls, state: dict) -> "BPETokenizer":
         tokenizer = cls(state["vocab_size"])
-        tokenizer.merges = {
-            tuple(item["pair"]): item["new_id"] for item in state["merges"]
-        }
+        tokenizer.merges = {tuple(item["pair"]): item["new_id"] for item in state["merges"]}
         tokenizer.vocab = tokenizer._base_vocab()
 
         for pair, new_id in tokenizer.merges.items():
-            tokenizer.vocab[new_id] = (
-                tokenizer.vocab[pair[0]] + tokenizer.vocab[pair[1]]
-            )
+            tokenizer.vocab[new_id] = tokenizer.vocab[pair[0]] + tokenizer.vocab[pair[1]]
 
         return tokenizer
 

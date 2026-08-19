@@ -14,6 +14,7 @@ An educational LLM which visualizes different stages of the LLM! Built with both
     - Abstracted configuration into `GPTConfig`
     - Vectorized causal self-attention in `CausalSelfAttention` (removed `SingleHeadAttention`, `MultiHeadAttention`)
     - Added `MLP` with tanh-approximation GELU (same as GPT-2) (removed `FeedForward`)
+    - Weight tying between input and output layers (`lm_head` and `token_embedding_table`)
 
 ## Brainstorming
 
