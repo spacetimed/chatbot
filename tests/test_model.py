@@ -5,6 +5,7 @@ from chatbot.model import GPT
 
 # basic low-compute tests to ensure the model is functional
 
+
 def test_model():
 
     torch.manual_seed(1337)
@@ -17,7 +18,7 @@ def test_model():
         dropout=0.0,
     )
     model = GPT(config)
-    tokens = torch.randint(0, 64, (2, 9)) # 2x9 containing rand int [0,64)
+    tokens = torch.randint(0, 64, (2, 9))  # 2x9 containing rand int [0,64)
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
 
@@ -29,7 +30,7 @@ def test_model():
 
     loss.backward()
     assert model.token_embedding_table.weight.grad is not None
-    
+
 
 def test_force_overfit():
     # Force the model to overfit one batch; ensure loss drops substantially overall.
@@ -47,7 +48,7 @@ def test_force_overfit():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
 
-    tokens = torch.randint(0, 64, (2, 9)) # 2x9 containing rand int [0,64)
+    tokens = torch.randint(0, 64, (2, 9))  # 2x9 containing rand int [0,64)
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
 

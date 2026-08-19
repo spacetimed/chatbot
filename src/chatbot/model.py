@@ -89,7 +89,7 @@ class CausalSelfAttention(nn.Module):
         # for each (b,h), compute [T,D] @ [D,T] to compare every query token
         # against every key token; this produces one [T,T] score matrix per head
         scores = q @ k.transpose(-2, -1)  # [B,H,T,T]
-        scores = scores * (self.head_size ** -0.5)
+        scores = scores * (self.head_size**-0.5)
 
         # triangular mask prevents each token from attending to future tokens
         scores = scores.masked_fill(
@@ -207,9 +207,7 @@ class GPT(nn.Module):
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
-        self.blocks = nn.Sequential(
-            *[Block(config) for _ in range(config.n_layer)]
-        )
+        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
 
         # final normalization + vocab projection
         self.ln_f = nn.LayerNorm(self.n_embed)
@@ -263,7 +261,7 @@ class GPT(nn.Module):
         self.eval()
 
         for _ in range(max_new_tokens):
-            idx_cond = idx[:, -self.block_size:]
+            idx_cond = idx[:, -self.block_size :]
 
             logits, _ = self(idx_cond)
             logits = logits[:, -1, :]

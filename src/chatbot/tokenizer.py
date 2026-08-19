@@ -74,13 +74,14 @@ class BPETokenizer:
     def from_dict(cls, state: dict) -> "BPETokenizer":
         tokenizer = cls(state["vocab_size"])
         tokenizer.merges = {
-            tuple(item["pair"]): item["new_id"]
-            for item in state["merges"]
+            tuple(item["pair"]): item["new_id"] for item in state["merges"]
         }
         tokenizer.vocab = tokenizer._base_vocab()
 
         for pair, new_id in tokenizer.merges.items():
-            tokenizer.vocab[new_id] = tokenizer.vocab[pair[0]] + tokenizer.vocab[pair[1]]
+            tokenizer.vocab[new_id] = (
+                tokenizer.vocab[pair[0]] + tokenizer.vocab[pair[1]]
+            )
 
         return tokenizer
 

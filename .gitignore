@@ -5,6 +5,7 @@ todo.txt
 .env.*
 datasets/*
 references/
+.vscode/
 
 # bloat
 __pycache__

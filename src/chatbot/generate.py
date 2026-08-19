@@ -50,7 +50,7 @@ def generate_stream(model, context, max_new_tokens, temperature, decode, header)
     idx = context
 
     for step in range(max_new_tokens):
-        idx_cond = idx[:, -model.block_size:]
+        idx_cond = idx[:, -model.block_size :]
         logits, _ = model(idx_cond)
         logits = logits[:, -1, :] / temperature
         probs = torch.softmax(logits, dim=-1)
