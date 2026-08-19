@@ -2,14 +2,14 @@
 
 An educational LLM which visualizes different stages of the LLM! Built with both privacy and education in mind.
 
-# Roadmap
+## Implementation progress
 
-**Phase 0** (Basic scaffolding)
+**Phase 0** (Basic scaffolding) — *Complete*
 - Create the project's environment (`pyproject.toml`, `pytest`, `venv`, etc.)
 - Import my decoder-only GPT from `gradcore/`, and get the basics working
 - Some small smoke tests
 
-**Phase 1** (GPT-2-style model)
+**Phase 1** (GPT-2-style model) — *Complete*
 - Mold the model in the direction of GPT-2. GPT-2-style implementations added:
     - Abstracted configuration into `GPTConfig`
     - Vectorized causal self-attention in `CausalSelfAttention` (removed `SingleHeadAttention`, `MultiHeadAttention`)
@@ -21,6 +21,18 @@ An educational LLM which visualizes different stages of the LLM! Built with both
         - Gradient clipping to combat exploding gradients
         - Decaying learning rate
         - AdamW configuration (similar to Karpathy's nanogpt)
+
+**Phase 2** (Rewrite Python tokenizer; port rewrite to C++/Rust) — *In-progress*
+- Three different languages will be used to create versions of the same BPE tokenizer, and compare/benchmark results:
+    1. Python 
+    2. C++
+    3. Rust
+- Firstly, I'll rewrite a single Tokenizer specification used by all three implementations. All implementations will:
+    - Consume the exact same learned merge table.
+    - Produce identical token IDs and decoded bytes.
+    - Report the same analytics: MB/s, token/s, peak memory, compression ratio.
+- The Python implementation will be used as a baseline, and to offer basic readability of my algorithm.
+- Both C++ and Rust implementations will "compete" in performance (relative to baseline), and utilize low-level optimizations like SIMD.
 
 ## Brainstorming
 
@@ -34,7 +46,7 @@ Model / ML
 - Determine appropriate model size and training corpus
 - Rent GPU for training
 - Checkpointing and model versioning
-- Custom C/C++ tokenizer implementation
+- Custom Rust/C++ tokenizer implementation
 - Custom CUDA kernel for one or more operations
 - Benchmark custom implementations against PyTorch/reference versions
 
