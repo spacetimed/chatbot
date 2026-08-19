@@ -1,5 +1,7 @@
+import math
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 
 import torch
 
@@ -66,6 +68,46 @@ def get_device() -> torch.device:
         return torch.device("mps")
     else:
         return torch.device("cpu")
+
+
+# wait for asynchronous accelerator work to finish before measuring time
+def synchronize_device(
+    device: torch.device,
+) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+
+
+def get_learning_rate(
+    step: int,
+    config: TrainConfig,
+) -> float:
+
+    # get learning rate relative to current training step
+    # gradually increases then decreases
+
+    if not (0 <= config.warmup_steps < config.max_steps):
+        raise ValueError("warmup_steps must be non-negative and less than max_steps")
+
+    if not (0.0 <= config.min_learning_rate <= config.learning_rate):
+        raise ValueError("min_learning_rate must be between zero and learning_rate")
+
+    # linearly increase from small learning rate to maximum learning rate
+    if (config.warmup_steps > 0) and (step <= config.warmup_steps):
+        return config.learning_rate * step / config.warmup_steps
+
+    # decay from maximum learning rate to minimum learning rate
+    decay_start = max(config.warmup_steps, 1)
+
+    if step >= config.max_steps:
+        return config.min_learning_rate
+
+    decay_ratio = (step - decay_start) / (config.max_steps - decay_start)
+    cosine_coefficient = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+
+    return config.min_learning_rate + cosine_coefficient * (config.learning_rate - config.min_learning_rate)
 
 
 def prepare_data(
@@ -153,7 +195,7 @@ def evaluate_and_report(
         "val": evaluate_loss(model, val_loader, device, eval_batches),
     }
 
-    print(f"step {step:4d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
+    print(f"eval  | step {step:4d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 
     return losses
 
@@ -230,6 +272,49 @@ def save_evaluation_checkpoints(
     return best_val_loss
 
 
+def create_optimizer(
+    model: GPT,
+    config: TrainConfig,
+) -> torch.optim.AdamW:
+
+    # create optimizer with custom AdamW configuration
+
+    # filter parameters with gradients
+    parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+
+    # matrix weights used by Linear and Embedding layers receive weight decay
+    decay_parameters = [parameter for parameter in parameters if parameter.dim() >= 2]
+
+    # biases and LayerNorm parameters do not receive weight decay
+    no_decay_parameters = [parameter for parameter in parameters if parameter.dim() < 2]
+
+    parameter_groups = [
+        {
+            "params": decay_parameters,
+            "weight_decay": config.weight_decay,
+        },
+        {
+            "params": no_decay_parameters,
+            "weight_decay": 0.0,
+        },
+    ]
+
+    decay_parameter_count = sum(parameter.numel() for parameter in decay_parameters)
+    no_decay_parameter_count = sum(parameter.numel() for parameter in no_decay_parameters)
+
+    print(f"decayed parameters: {decay_parameter_count:,}")
+    print(f"non-decayed parameters: {no_decay_parameter_count:,}")
+
+    optimizer = torch.optim.AdamW(
+        parameter_groups,
+        lr=config.learning_rate,
+        betas=(config.adam_beta1, config.adam_beta2),
+        eps=1e-8,
+    )
+
+    return optimizer
+
+
 def main() -> None:
     train_config = TrainConfig()
 
@@ -271,9 +356,9 @@ def main() -> None:
 
     model = GPT(model_config).to(device)
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=train_config.learning_rate,
+    optimizer = create_optimizer(
+        model,
+        train_config,
     )
 
     # information/specs
@@ -305,9 +390,22 @@ def main() -> None:
         best_val_loss=best_val_loss,
     )
 
+    if train_config.log_interval <= 0:
+        raise ValueError("log_interval must be positive")
+
+    interval_loss = 0.0
+    interval_seconds = 0.0
+    interval_tokens = 0
+    interval_steps = 0
+    interval_grad_norm = 0.0
+
     # training loop
     model.train()
     for step in range(1, train_config.max_steps + 1):
+        # synchronize before starting so previous accelerator work is not included
+        synchronize_device(device)
+        step_start = perf_counter()
+
         x, y = train_loader.next_batch()
         x = x.to(device)
         y = y.to(device)
@@ -316,7 +414,48 @@ def main() -> None:
         _, loss = model(x, y)
 
         loss.backward()
+        # gradient clipping
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            train_config.max_grad_norm,
+        )
+
+        step_learning_rate = get_learning_rate(step, train_config)
+        for parameter_group in optimizer.param_groups:
+            parameter_group["lr"] = step_learning_rate
+
         optimizer.step()
+
+        # synchronize again so the full training step finishes before stopping the timer
+        synchronize_device(device)
+        step_seconds = perf_counter() - step_start
+
+        interval_loss += loss.item()
+        interval_seconds += step_seconds
+        interval_tokens += train_loader.tokens_per_batch
+        interval_steps += 1
+        interval_grad_norm += grad_norm.item()
+
+        if step % train_config.log_interval == 0 or step == train_config.max_steps:
+            average_loss = interval_loss / interval_steps
+            average_grad_norm = interval_grad_norm / interval_steps
+            average_step_ms = (interval_seconds / interval_steps) * 1_000
+            tokens_per_second = interval_tokens / interval_seconds
+
+            print(
+                f"train | step {step:4d} | "
+                f"loss {average_loss:.4f} | "
+                f"lr {step_learning_rate:.2e} | "
+                f"grad norm {average_grad_norm:.4f} | "
+                f"{average_step_ms:.2f} ms/step | "
+                f"{tokens_per_second:,.0f} tok/s"
+            )
+
+            interval_loss = 0.0
+            interval_grad_norm = 0.0
+            interval_seconds = 0.0
+            interval_tokens = 0
+            interval_steps = 0
 
         if step % train_config.eval_interval == 0 or step == train_config.max_steps:
             losses = evaluate_and_report(

@@ -22,11 +22,23 @@ class TrainConfig:
 
     seed: int = 1337
     batch_size: int = 16
-    max_steps: int = 100
+
+    max_steps: int = 2_000
+    warmup_steps: int = 100
+
+    log_interval: int = 100
+    eval_interval: int = 250
+    eval_batches: int = 20
+
     learning_rate: float = 3e-4
+    min_learning_rate: float = 3e-5
+    max_grad_norm: float = 1.0
 
     train_split: float = 0.9
-    eval_interval: int = 25
-    eval_batches: int = 10
 
     tokenizer_vocab_size: int = 256
+
+    # GPT-style AdamW configuration
+    weight_decay: float = 0.1
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.95

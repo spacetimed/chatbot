@@ -4,18 +4,23 @@ An educational LLM which visualizes different stages of the LLM! Built with both
 
 # Roadmap
 
-**Phase 0**
-- Create the project's environment (`pyproject.toml`, `pytest`, etc.)
+**Phase 0** (Basic scaffolding)
+- Create the project's environment (`pyproject.toml`, `pytest`, `venv`, etc.)
 - Import my decoder-only GPT from `gradcore/`, and get the basics working
 - Some small smoke tests
 
-**Phase 1**
+**Phase 1** (GPT-2-style model)
 - Mold the model in the direction of GPT-2. GPT-2-style implementations added:
     - Abstracted configuration into `GPTConfig`
     - Vectorized causal self-attention in `CausalSelfAttention` (removed `SingleHeadAttention`, `MultiHeadAttention`)
     - Added `MLP` with tanh-approximation GELU (same as GPT-2) (removed `FeedForward`)
     - Weight tying between input and output layers (`lm_head` and `token_embedding_table`)
     - Weight initialization with `std=0.02`, scaled by `1/√(2*num_layers)` for residual-output projections 
+    - Rewrite `train.py` completely with basic checkpointing and a `TrainConfig` abstraction
+        - Improve logging and analytics to prepare for system analyzing
+        - Gradient clipping to combat exploding gradients
+        - Decaying learning rate
+        - AdamW configuration (similar to Karpathy's nanogpt)
 
 ## Brainstorming
 
