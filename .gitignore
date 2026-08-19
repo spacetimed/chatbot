@@ -6,6 +6,9 @@ todo.txt
 datasets/*
 references/
 .vscode/
+checkpoints/
+logs/
+train_old.py
 
 # bloat
 __pycache__

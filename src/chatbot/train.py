@@ -1,279 +1,179 @@
-from dataclasses import asdict
 from pathlib import Path
-from datetime import datetime
-from time import perf_counter
 
 import torch
 
-from chatbot.config import GPTConfig
+from chatbot.config import GPTConfig, TrainConfig
 from chatbot.model import GPT
 from chatbot.tokenizer import BPETokenizer
 
 
-# config
-data_path = Path("datasets/plato.txt")
-checkpoint_path = Path("checkpoints/gplato.pt")
-log_path = Path("logs/gplato_train.log")
-seed = 1337
+# TokenBatchLoader will take a long token stream, select chunks containing BxT+1 tokens, and reshape them into B sequences of length T
+# labels are made from shifting the same tokens by 1 position
+class TokenBatchLoader:
+    def __init__(
+        self,
+        tokens: torch.Tensor,
+        batch_size: int,
+        block_size: int,
+    ) -> None:
 
-# hyperparameters -----
-batch_size = 16
-block_size = 64
-tokenizer_vocab_size = 256
-n_embed = 64
-num_heads = 4
-n_layers = 2
+        self.tokens = tokens
+        self.batch_size = batch_size
+        self.block_size = block_size
 
-lr = 3e-4
+        self.tokens_per_batch = batch_size * block_size
 
-dropout = 0.15
+        if tokens.ndim != 1:
+            raise ValueError("tokens must be a one-dimensional tensor")
 
-max_iters = 100
-eval_interval = 25
-eval_iters = 10
+        minimum_tokens = self.tokens_per_batch + 1
+        if len(tokens) < minimum_tokens:
+            raise ValueError(f"batch loader requires at least {minimum_tokens} tokens, but received {len(tokens)}")
 
-gen_tokens = 100
+        self.reset()
 
-temperature = 0.8  # soften sampling
-# ---------------------
+    def reset(self) -> None:
+        self.current_position = 0
+
+    def next_batch(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # sequentially returns two [B,T] tensors from dataset (input token IDs, target token IDs)
+
+        batch_end = self.current_position + self.tokens_per_batch + 1
+
+        # wrap back around dataset
+        if batch_end > len(self.tokens):
+            self.reset()
+            batch_end = self.tokens_per_batch + 1
+
+        buffer = self.tokens[self.current_position : batch_end]
+
+        x = buffer[:-1].view(self.batch_size, self.block_size)
+        y = buffer[1:].view(self.batch_size, self.block_size)
+
+        self.current_position += self.tokens_per_batch
+
+        return x, y
 
 
-def format_duration(seconds: float):
-    seconds = int(seconds)
-    hours, rem = divmod(seconds, 3600)
-    minutes, seconds = divmod(rem, 60)
-
-    if hours:
-        return f"{hours}h {minutes}m {seconds}s"
-    if minutes:
-        return f"{minutes}m {seconds}s"
-    return f"{seconds}s"
-
-
-def get_device():
+# cuda > mps > cpu (priority order)
+def get_device() -> torch.device:
     if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
 
 
-def load_text(path: Path):
-    return path.read_text(encoding="utf-8")
+def prepare_data(
+    config: TrainConfig,
+) -> tuple[BPETokenizer, torch.Tensor, torch.Tensor]:
+    # returns three objects:
+    #   tokenizer:    trained BPETokenizer
+    #   train_tokens: 1D CPU tensor containing training token IDs
+    #   val_tokens:   1D CPU tensor containing the validation token IDs
+
+    if not (0.0 < config.train_split < 1.0):
+        raise ValueError("train_split must be within range (0,1)")
+
+    text = config.dataset_path.read_text(encoding="utf-8")
+
+    if not text:
+        raise ValueError(f"dataset is empty: {config.dataset_path}")
+
+    split_index = int(len(text) * config.train_split)  # index to split training/validation data
+
+    train_text = text[:split_index]
+    val_text = text[split_index:]
+
+    tokenizer = BPETokenizer(config.tokenizer_vocab_size)
+    tokenizer.train(train_text)
+
+    train_token_ids = tokenizer.encode(train_text)
+    val_token_ids = tokenizer.encode(val_text)
+
+    train_tokens = torch.tensor(
+        train_token_ids,
+        dtype=torch.long,
+    )
+    val_tokens = torch.tensor(
+        val_token_ids,
+        dtype=torch.long,
+    )
+
+    return tokenizer, train_tokens, val_tokens
 
 
-def build_tokenizer(text: str):
-    tokenizer = BPETokenizer(tokenizer_vocab_size)
-    tokenizer.train(text, verbose=True)
-    return tokenizer
+def main() -> None:
+    train_config = TrainConfig()
 
-
-def split_data(data: torch.Tensor):
-    n = int(0.9 * len(data))
-    return data[:n], data[n:]
-
-
-def get_batch(split, train_data, val_data, block_size, batch_size, device):
-    source = train_data if split == "train" else val_data
-    ix = torch.randint(len(source) - block_size, (batch_size,), device=device)
-    x = torch.stack([source[i : i + block_size] for i in ix])
-    y = torch.stack([source[i + 1 : i + block_size + 1] for i in ix])
-    return x, y
-
-
-@torch.no_grad()
-def estimate_loss(model, train_data, val_data, block_size, batch_size, device, eval_iters):
-    out = {}
-    was_training = model.training
-    model.eval()
-
-    for split in ["train", "val"]:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            xb, yb = get_batch(split, train_data, val_data, block_size, batch_size, device)
-            _, loss = model(xb, yb)
-            losses[k] = loss.item()
-        out[split] = losses.mean().item()
-
-    if was_training:
-        model.train()
-
-    return out
-
-
-def save_checkpoint(path, model, optimizer, tokenizer, step, losses, best_val_loss):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = {
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "config": asdict(model.config),
-        "tokenizer": tokenizer.to_dict(),
-        "step": step,
-        "losses": losses,
-        "best_val_loss": best_val_loss,
-    }
-    torch.save(checkpoint, path)
-
-
-def log_run(path, elapsed_seconds, device, n_params, vocab_size, losses):
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("a", encoding="utf-8") as f:
-        f.write(f"run: {datetime.now().isoformat(timespec='seconds')}\n")
-        f.write(f"device: {device}\n")
-        f.write(f"parameters: {n_params}\n")
-        f.write(f"vocab_size: {vocab_size}\n")
-        f.write(
-            "hyperparameters: "
-            f"batch_size={batch_size}, "
-            f"block_size={block_size}, "
-            f"tokenizer_vocab_size={tokenizer_vocab_size}, "
-            f"n_embed={n_embed}, "
-            f"num_heads={num_heads}, "
-            f"n_layers={n_layers}, "
-            f"dropout={dropout}, "
-            f"lr={lr}, "
-            f"max_iters={max_iters}, "
-            f"eval_interval={eval_interval}, "
-            f"eval_iters={eval_iters}\n"
-        )
-        f.write(f"losses: train={losses['train']:.4f}, val={losses['val']:.4f}\n")
-        f.write(f"elapsed: {format_duration(elapsed_seconds)} ({elapsed_seconds:.2f}s)\n")
-        f.write(f"checkpoint: {checkpoint_path}\n\n")
-
-
-def main():
-    torch.manual_seed(seed)
+    torch.manual_seed(train_config.seed)
     device = get_device()
 
-    if device == "cuda":
-        torch.set_float32_matmul_precision("high")
-        print("enabled cuda tf32 matmul")
+    tokenizer, train_tokens, val_tokens = prepare_data(train_config)
 
-    text = load_text(data_path)
-    tokenizer = build_tokenizer(text)
-    token_ids = tokenizer.encode(text)
-    vocab_size = len(tokenizer.vocab)
-
-    data = torch.tensor(token_ids, dtype=torch.long, device=device)
-    train_data, val_data = split_data(data)
-
+    # model architecture
     model_config = GPTConfig(
-        vocab_size=vocab_size,
-        block_size=block_size,
-        n_embed=n_embed,
-        n_head=num_heads,
-        n_layer=n_layers,
-        dropout=dropout,
+        vocab_size=len(tokenizer.vocab),
+        block_size=64,
+        n_embed=64,
+        n_head=4,
+        n_layer=2,
+        dropout=0.15,
     )
+
+    # training data
+    train_loader = TokenBatchLoader(
+        train_tokens,
+        train_config.batch_size,
+        model_config.block_size,
+    )
+
+    # validation data
+    val_loader = TokenBatchLoader(
+        val_tokens,
+        train_config.batch_size,
+        model_config.block_size,
+    )
+
+    # for training loss measurements during eval
+    train_eval_loader = TokenBatchLoader(
+        train_tokens,
+        train_config.batch_size,
+        model_config.block_size,
+    )
+
     model = GPT(model_config).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, fused=(device == "cuda"))
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=train_config.learning_rate,
+    )
 
-    n_params = sum(p.numel() for p in model.parameters())
-
+    # information/specs
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
     print(f"device: {device}")
-    print(f"characters in dataset: {len(text)}")
-    print(f"tokens in dataset: {len(token_ids)}")
-    print(f"vocab size: {vocab_size}")
-    print(f"parameters: {n_params:,}")
+    print(f"training tokens: {len(train_tokens)}")
+    print(f"validation tokens: {len(val_tokens)}")
+    print(f"vocab size: {len(tokenizer.vocab)}")
+    print(f"parameters: {parameter_count:,}")
 
-    last_losses = None
-    best_step = None
-    best_losses = None
-    best_val_loss = float("inf")
-    train_start = perf_counter()
-    last_eval_time = train_start
-    for step in range(max_iters + 1):
-        if step % eval_interval == 0:
-            losses = estimate_loss(
-                model,
-                train_data,
-                val_data,
-                block_size,
-                batch_size,
-                device,
-                eval_iters,
-            )
-            last_losses = losses
-            saved_best = False
-            if losses["val"] < best_val_loss:
-                best_val_loss = losses["val"]
-                best_step = step
-                best_losses = losses
-                save_checkpoint(
-                    checkpoint_path,
-                    model,
-                    optimizer,
-                    tokenizer,
-                    step,
-                    losses,
-                    best_val_loss,
-                )
-                saved_best = True
-
-            now = perf_counter()
-            total_elapsed = now - train_start
-            eval_delta = now - last_eval_time
-            last_eval_time = now
-            print(
-                f"step {step:4d} | "
-                f"train loss {losses['train']:.4f} | "
-                f"val loss {losses['val']:.4f} | "
-                f"elapsed {format_duration(total_elapsed)} | "
-                f"+{format_duration(eval_delta)}"
-                f"{' | saved best' if saved_best else ''}"
-            )
-
-        xb, yb = get_batch("train", train_data, val_data, block_size, batch_size, device)
-        _, loss = model(xb, yb)
-
+    # training loop
+    model.train()
+    for step in range(1, train_config.max_steps + 1):
+        x, y = train_loader.next_batch()
+        x = x.to(device)
+        y = y.to(device)
         optimizer.zero_grad(set_to_none=True)
+
+        _, loss = model(x, y)
+
         loss.backward()
         optimizer.step()
 
-    elapsed_seconds = perf_counter() - train_start
-
-    if last_losses is None:
-        last_losses = estimate_loss(
-            model,
-            train_data,
-            val_data,
-            block_size,
-            batch_size,
-            device,
-            eval_iters,
-        )
-
-    if best_losses is None:
-        best_losses = last_losses
-        best_step = max_iters
-        best_val_loss = last_losses["val"]
-        save_checkpoint(
-            checkpoint_path,
-            model,
-            optimizer,
-            tokenizer,
-            best_step,
-            best_losses,
-            best_val_loss,
-        )
-
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-
-    print(f"\nsaved best checkpoint: {checkpoint_path}")
-    print(f"best step: {best_step} | best val loss: {best_val_loss:.4f}")
-    print(f"time taken to train: {format_duration(elapsed_seconds)} ({elapsed_seconds:.2f}s)")
-
-    log_run(log_path, elapsed_seconds, device, n_params, vocab_size, best_losses)
-    print(f"logged run: {log_path}")
-
-    context_ids = tokenizer.encode("\n")
-    context = torch.tensor([context_ids], dtype=torch.long, device=device)
-    generated = model.generate(context, max_new_tokens=gen_tokens, temperature=temperature)
-    print("\n--- sample ---")
-    print(tokenizer.decode(generated[0].tolist()))
+        print(f"step {step:4d} | train loss {loss.item():.4f}")
 
 
 if __name__ == "__main__":
