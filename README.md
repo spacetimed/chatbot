@@ -11,7 +11,6 @@ An educational LLM which visualizes different stages of the LLM! Built with both
 
 **Phase 1**
 - Mold the model in the direction of GPT-2. Implementations include:
-    - 
 
 ## Brainstorming
 

@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
 from time import perf_counter
@@ -105,14 +106,7 @@ def save_checkpoint(path, model, optimizer, tokenizer, step, losses, best_val_lo
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "config": {
-            "vocab_size": model.vocab_size,
-            "block_size": model.block_size,
-            "n_embed": model.n_embed,
-            "num_heads": model.num_heads,
-            "n_layers": model.n_layer,
-            "dropout": model.dropout,
-        },
+        "config": asdict(model.config),
         "tokenizer": tokenizer.to_dict(),
         "step": step,
         "losses": losses,

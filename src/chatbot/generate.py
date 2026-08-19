@@ -71,14 +71,7 @@ def main():
     checkpoint = torch.load(checkpoint_path, map_location=device)
     config = checkpoint["config"]
 
-    model_config = GPTConfig(
-        vocab_size=config["vocab_size"],
-        block_size=config["block_size"],
-        n_embed=config["n_embed"],
-        n_head=config["num_heads"],
-        n_layer=config["n_layers"],
-        dropout=config.get("dropout", 0.0),
-    )
+    model_config = GPTConfig(**config)
     model = GPT(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
