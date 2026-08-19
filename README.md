@@ -1,15 +1,15 @@
 # chatbot
 
-An educational LLM which visualizes different stages of the LLM! Built with both privacy and education in mind.
+An educational chatbot that visualizes different stages of an LLM. 
 
 ## Implementation progress
 
-**Phase 0** (Basic scaffolding) — *Complete*
+**Phase 0: Preliminary** — *Complete*
 - Create the project's environment (`pyproject.toml`, `pytest`, `venv`, etc.)
 - Import my decoder-only GPT from `gradcore/`, and get the basics working
 - Some small smoke tests
 
-**Phase 1** (GPT-2-style model) — *Complete*
+**Phase 1: Model GPT-2-like Architecture** — *Complete*
 - Mold the model in the direction of GPT-2. GPT-2-style implementations added:
     - Abstracted configuration into `GPTConfig`
     - Vectorized causal self-attention in `CausalSelfAttention` (removed `SingleHeadAttention`, `MultiHeadAttention`)
@@ -22,17 +22,13 @@ An educational LLM which visualizes different stages of the LLM! Built with both
         - Decaying learning rate
         - AdamW configuration (similar to Karpathy's nanogpt)
 
-**Phase 2** (Rewrite Python tokenizer; port rewrite to C++/Rust) — *In-progress*
-- Three different languages will be used to create versions of the same BPE tokenizer, and compare/benchmark results:
-    1. Python 
-    2. C++
-    3. Rust
-- Firstly, I'll rewrite a single Tokenizer specification used by all three implementations. All implementations will:
-    - Consume the exact same learned merge table.
-    - Produce identical token IDs and decoded bytes.
-    - Report the same analytics: MB/s, token/s, peak memory, compression ratio.
-- The Python implementation will be used as a baseline, and to offer basic readability of my algorithm.
-- Both C++ and Rust implementations will "compete" in performance (relative to baseline), and utilize low-level optimizations like SIMD.
+**Phase 2: Tokenizer challenge, implemented in Python, C++, and Rust** — *In-progress*
+
+- The tokenizer ([which I wrote a specification for](docs/tokenizer.md)) will be created three times in each language: **Python, C++, and Rust**.
+- Results will be benchmarked, and the most optimal implementation will be used.
+- The **Python** implementation will be used both as a baseline and to offer basic readability of my algorithm. The **C++ and Rust** variants will need to deterministically create the same output as said baseline.
+- Different low-level optimization techniques can be used in both the **C++ and Rust** variants (e.g. SIMD), so long as the same output is created.
+- **Why?** Curiosity, optimization is fun. And because a tokenizer is simple enough that it can provide a nice exercise in other languages.
 
 ## Brainstorming
 
@@ -106,6 +102,7 @@ For this project, my reliance on AI tools is very constrained. AI tools will be 
 All code and architectural decisions will be primarily my own. I'm using this to learn.
 
 ## References
-- https://github.com/karpathy/build-nanogpt
+- [NanoGPT by Karpathy](https://github.com/karpathy/build-nanogpt)
+- [GPT-2 Tokenizer by OpenAI](https://github.com/openai/gpt-2/blob/master/src/encoder.py)
 - *Language Models are Unsupervised Multitask Learners* 
 - *Attention Is All You Need*

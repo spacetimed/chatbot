@@ -9,6 +9,7 @@ references/
 checkpoints/
 logs/
 train_old.py
+tokenizer_old.py
 
 # bloat
 __pycache__
