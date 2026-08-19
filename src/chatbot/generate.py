@@ -1,3 +1,5 @@
+# todo: redo this entire file, its stale after redoing train.py
+
 from pathlib import Path
 
 import torch
@@ -6,8 +8,7 @@ from chatbot.config import GPTConfig
 from chatbot.model import GPT
 from chatbot.tokenizer import BPETokenizer
 
-
-checkpoint_path = Path("checkpoints/gplato.pt")
+checkpoint_path = Path("checkpoints/best.pt")
 max_new_tokens = 1_000
 temperature = 0.8
 prompt = ""

@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 
 import torch
@@ -106,6 +107,129 @@ def prepare_data(
     return tokenizer, train_tokens, val_tokens
 
 
+@torch.no_grad()
+def evaluate_loss(
+    model: GPT,
+    loader: TokenBatchLoader,
+    device: torch.device,
+    eval_batches: int,
+) -> float:
+    # used mid-training to evaluate current model with several [B,T] batches
+
+    if eval_batches <= 0:
+        raise ValueError("eval_batches must be positive")
+
+    was_training = model.training
+    model.eval()
+    loader.reset()
+
+    total_loss = 0.0
+
+    for _ in range(eval_batches):
+        x, y = loader.next_batch()
+        x = x.to(device)
+        y = y.to(device)
+
+        _, loss = model(x, y)
+        total_loss += loss.item()
+
+    if was_training:
+        model.train()
+
+    return total_loss / eval_batches
+
+
+def evaluate_and_report(
+    model: GPT,
+    train_loader: TokenBatchLoader,
+    val_loader: TokenBatchLoader,
+    device: torch.device,
+    eval_batches: int,
+    step: int,
+) -> dict[str, float]:
+    # prints training information at current step; returns dict (for checkpoint storage)
+    losses = {
+        "train": evaluate_loss(model, train_loader, device, eval_batches),
+        "val": evaluate_loss(model, val_loader, device, eval_batches),
+    }
+
+    print(f"step {step:4d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
+
+    return losses
+
+
+def save_checkpoint(
+    path: Path,
+    model: GPT,
+    optimizer: torch.optim.Optimizer,
+    tokenizer: BPETokenizer,
+    train_config: TrainConfig,
+    step: int,
+    losses: dict[str, float],
+    best_val_loss: float,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    train_config_state = asdict(train_config)
+    train_config_state["dataset_path"] = str(train_config.dataset_path)
+    train_config_state["checkpoint_dir"] = str(train_config.checkpoint_dir)
+
+    checkpoint = {
+        "checkpoint_version": 1,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "config": asdict(model.config),
+        "train_config": train_config_state,
+        "tokenizer": tokenizer.to_dict(),
+        "step": step,
+        "losses": losses,
+        "best_val_loss": best_val_loss,
+    }
+
+    torch.save(checkpoint, path)
+
+
+def save_evaluation_checkpoints(
+    model: GPT,
+    optimizer: torch.optim.Optimizer,
+    tokenizer: BPETokenizer,
+    train_config: TrainConfig,
+    step: int,
+    losses: dict[str, float],
+    best_val_loss: float,
+) -> float:
+    is_best = losses["val"] < best_val_loss
+
+    if is_best:
+        best_val_loss = losses["val"]
+
+    if train_config.checkpoint_save_latest:
+        save_checkpoint(
+            train_config.checkpoint_dir / "latest.pt",
+            model,
+            optimizer,
+            tokenizer,
+            train_config,
+            step,
+            losses,
+            best_val_loss,
+        )
+
+    if train_config.checkpoint_save_best and is_best:
+        save_checkpoint(
+            train_config.checkpoint_dir / "best.pt",
+            model,
+            optimizer,
+            tokenizer,
+            train_config,
+            step,
+            losses,
+            best_val_loss,
+        )
+
+    return best_val_loss
+
+
 def main() -> None:
     train_config = TrainConfig()
 
@@ -160,6 +284,27 @@ def main() -> None:
     print(f"vocab size: {len(tokenizer.vocab)}")
     print(f"parameters: {parameter_count:,}")
 
+    best_val_loss = float("inf")
+
+    # measure step zero
+    losses = evaluate_and_report(
+        model,
+        train_eval_loader,
+        val_loader,
+        device,
+        train_config.eval_batches,
+        step=0,
+    )
+    best_val_loss = save_evaluation_checkpoints(
+        model,
+        optimizer,
+        tokenizer,
+        train_config,
+        step=0,
+        losses=losses,
+        best_val_loss=best_val_loss,
+    )
+
     # training loop
     model.train()
     for step in range(1, train_config.max_steps + 1):
@@ -173,7 +318,24 @@ def main() -> None:
         loss.backward()
         optimizer.step()
 
-        print(f"step {step:4d} | train loss {loss.item():.4f}")
+        if step % train_config.eval_interval == 0 or step == train_config.max_steps:
+            losses = evaluate_and_report(
+                model,
+                train_eval_loader,
+                val_loader,
+                device,
+                train_config.eval_batches,
+                step,
+            )
+            best_val_loss = save_evaluation_checkpoints(
+                model,
+                optimizer,
+                tokenizer,
+                train_config,
+                step,
+                losses,
+                best_val_loss,
+            )
 
 
 if __name__ == "__main__":
