@@ -8,6 +8,25 @@ The Python implementation (`tokenizer.py`) will serve as the readable reference 
 
 - `tokenizer_driver.py` (see **Entry point: Running the driver**) provides the command-line interface used to run and benchmark a selected tokenizer implementation. It supplies input files and configuration, then saves the resulting artifacts.
 - `tokenizer.py`, `tokenizer.cpp`, and `tokenizer.rs` implement this specification in Python, C++, and Rust. Each implementation must be able to train a vocabulary, encode text, and decode token IDs.
+- Outputs will be generated with the following structure:
+```
+artifacts/
+      tokenizer/
+          python/
+              rules.json
+              tokens.bin
+              decoded.txt
+          cpp/
+              rules.json
+              tokens.bin
+              decoded.txt
+          rust/
+              rules.json
+              tokens.bin
+              decoded.txt
+          benchmarks/
+              results.json
+```
 
 The implementations may use different internal algorithms and optimizations, but must produce the same merge rules and token IDs given the same corpus and configuration.
 
@@ -21,15 +40,19 @@ python -m chatbot.tokenizer_driver <command> --language {python,cpp,rust} [optio
 
 Command:
 
-- `train`: Train a vocabulary from a corpus and write learned merge rules to `rules.json`.
+- `train`: Stream or load a cached FineWeb-Edu corpus, then train a vocabulary and write learned merge rules to `rules.json`.
 - `encode`: Load `rules.json`, encode input text, and write `tokens.bin`.
 - `decode`: Load `rules.json`, decode `tokens.bin`, and write `decoded.txt`.
+
+By default, each command writes to `artifacts/tokenizer/<language>/`. This keeps the Python, C++, and Rust outputs separate for correctness and performance comparisons.
 
 Options:
 
 - `--language {python,cpp,rust}`: Select the tokenizer implementation.
 - `--vocab-size N`: Set the mergeable vocabulary size during vocabulary training.
-- `--benchmark`: Provide performance output for benchmarking.
+- `--dataset-bytes N`: Limit how many FineWeb-Edu text bytes are streamed for the training corpus.
+- `--dataset-cache PATH`: Select an existing or new local JSONL cache for the streamed documents.
+- `--benchmark`: Print performance output and append the result to `artifacts/tokenizer/benchmarks/results.jsonl`.
 
 ## Data flow
 

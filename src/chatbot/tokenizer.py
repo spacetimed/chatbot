@@ -7,14 +7,15 @@ import regex
 
 # tokenizer spec information: ./docs/tokenizer.md
 
-# constants used by tokenizer.json artifact
-TOKENIZER_FORMAT = "chatbot-bpe"
-TOKENIZER_VERSION = 1
+# constants used by rules.json artifact
+TOKENIZER_FORMAT = "bpe"
+TOKENIZER_LANGUAGE = "py"
+SUPPORTED_LANGUAGES = {"py", "cpp", "rust"}
 GPT2_PATTERN_TEXT = r"'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
 GPT2_PATTERN = regex.compile(GPT2_PATTERN_TEXT)
 
 
-# helper functions (pretokenize, count_pairs, merge_pairs, write_tokens, read_tokens)
+# helper functions (pretokenize, count_pairs, merge_pair, write_tokens, read_tokens)
 def pretokenize(
     text: str,
 ) -> list[str]:
@@ -27,8 +28,6 @@ def pretokenize(
 def count_pairs(
     pieces: list[list[int]],
 ) -> dict[tuple[int, int], int]:
-
-    # same functionality as old tokenizer.py (karpathy-style)
 
     counts: dict[tuple[int, int], int] = {}
 
@@ -66,7 +65,7 @@ def write_tokens(
     token_ids: list[int],
 ) -> None:
 
-    # encodes the text and then writes it to file
+    # writes already-encoded token IDs to a binary file
 
     tokens = np.asarray(token_ids, dtype="<u4")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,16 +217,16 @@ class BPETokenizer:
         self,
     ) -> dict:
 
-        # for tokenizer.json artifact
+        # for rules.json artifact
 
         return {
             "format": TOKENIZER_FORMAT,
-            "version": TOKENIZER_VERSION,
+            "language": TOKENIZER_LANGUAGE,
             "pre_tokenizer": "gpt2",
             "mergeable_vocab_size": self.mergeable_vocab_size,
             "vocab_size": self.vocab_size,
             "special_tokens": self.special_tokens,
-            "pattern": GPT2_PATTERN_TEXT,
+            "regex": GPT2_PATTERN_TEXT,
             "merges": [
                 [left_token, right_token, new_token] for (left_token, right_token), new_token in self.merges.items()
             ],
@@ -239,10 +238,10 @@ class BPETokenizer:
         state: dict,
     ) -> "BPETokenizer":
 
-        if state.get("format") != TOKENIZER_FORMAT or state.get("version") != TOKENIZER_VERSION:
+        if state.get("format") != TOKENIZER_FORMAT or state.get("language") not in SUPPORTED_LANGUAGES:
             raise ValueError("unsupported tokenizer artifact")
 
-        if state.get("pre_tokenizer") != "gpt2" or state.get("pattern") != GPT2_PATTERN_TEXT:
+        if state.get("pre_tokenizer") != "gpt2" or state.get("regex") != GPT2_PATTERN_TEXT:
             raise ValueError("unsupported pre-tokenizer configuration")
 
         tokenizer = cls(

@@ -1,34 +1,39 @@
-# chatbot
+# Chatbot
 
-An educational chatbot that visualizes different stages of an LLM. 
+An chatbot that visualizes different stages of an LLM. Built with privacy and education in mind! 
 
-## Implementation progress
+## Progress
 
 **Phase 0: Preliminary** — *Complete*
-- Create the project's environment (`pyproject.toml`, `pytest`, `venv`, etc.)
-- Import my decoder-only GPT from `gradcore/`, and get the basics working
-- Some small smoke tests
+- Created the project's environment (`pyproject.toml`, `pytest`, `venv`, etc).
+- Imported my decoder-only GPT from `gradcore/`, and got the basics working.
+- Some small smoke tests to ensure it trains.
 
-**Phase 1: Model GPT-2-like Architecture** — *Complete*
-- Mold the model in the direction of GPT-2. GPT-2-style implementations added:
+**Phase 1: Upgrade to GPT-2-like Architecture** — *Complete*
+- Molded the model in the direction of GPT-2. GPT-2-style implementations added:
     - Abstracted configuration into `GPTConfig`
     - Vectorized causal self-attention in `CausalSelfAttention` (removed `SingleHeadAttention`, `MultiHeadAttention`)
     - Added `MLP` with tanh-approximation GELU (same as GPT-2) (removed `FeedForward`)
     - Weight tying between input and output layers (`lm_head` and `token_embedding_table`)
     - Weight initialization with `std=0.02`, scaled by `1/√(2*num_layers)` for residual-output projections 
-    - Rewrite `train.py` completely with basic checkpointing and a `TrainConfig` abstraction
-        - Improve logging and analytics to prepare for system analyzing
+    - Rewrote `train.py` completely with basic checkpointing and a `TrainConfig` abstraction
+        - Improved logging and analytics to prepare for system analyzing
         - Gradient clipping to combat exploding gradients
         - Decaying learning rate
         - AdamW configuration (similar to Karpathy's nanogpt)
 
 **Phase 2: Tokenizer challenge, implemented in Python, C++, and Rust** — *In-progress*
 
-- The tokenizer ([which I wrote a specification for](docs/tokenizer.md)) will be created three times in each language: **Python, C++, and Rust**.
-- Results will be benchmarked, and the most optimal implementation will be used.
-- The **Python** implementation will be used both as a baseline and to offer basic readability of my algorithm. The **C++ and Rust** variants will need to deterministically create the same output as said baseline.
-- Different low-level optimization techniques can be used in both the **C++ and Rust** variants (e.g. SIMD), so long as the same output is created.
-- **Why?** Curiosity, optimization is fun. And because a tokenizer is simple enough that it can provide a nice exercise in other languages.
+- Preliminary: [Tokenizer specification that I wrote](docs/tokenizer.md)
+    - The tokenizer will be created three times in each language: Python, C++, and Rust. 
+    - The Python one serves as a naive tokenizer implementation, whereas the C++ and Rust serve as optimized performant rewrites.
+    - Results will be benchmarked, and the most optimal implementation will be used in production.
+    - The C++ and Rust variants will need to deterministically create the same output as the Python baseline (tested through their artifacts).
+    - Different low-level optimization techniques can be used in both the C++ and Rust variants (e.g. SIMD), so long as the same output is created as Python.
+    - *Why?* Curiosity, optimization is fun. And because a tokenizer is simple enough that it provides a nice exercise to toy with other languages.
+- While working on the tokenizer, I upgraded the toy dataset from the Plato text used in Gradcore to streaming [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) with HuggingFace datasets. I still need to implement this new dataset into `train.py`.
+- I rewrote `tokenizer_driver.py` to serve as a harness for running different language tokenizer implementations.
+- I rewrote `tokenizer.py` (from my Gradcore repo) to be a naive and readable implementation for the C++ and Rust variants to follow. 
 
 ## Brainstorming
 
@@ -101,7 +106,7 @@ For this project, my reliance on AI tools is very constrained. AI tools will be 
 
 All code and architectural decisions will be primarily my own. I'm using this to learn.
 
-## References
+## References (todo, cite properly and hyperlink)
 - [NanoGPT by Karpathy](https://github.com/karpathy/build-nanogpt)
 - [GPT-2 Tokenizer by OpenAI](https://github.com/openai/gpt-2/blob/master/src/encoder.py)
 - *Language Models are Unsupervised Multitask Learners* 

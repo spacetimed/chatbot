@@ -3,13 +3,14 @@ MISC.md
 todo.txt
 .env
 .env.*
-datasets/*
-references/
 .vscode/
-checkpoints/
-logs/
-train_old.py
-tokenizer_old.py
+references/*
+
+# project-specific
+artifacts/*
+checkpoints/*
+logs/*
+datasets/*
 
 # bloat
 __pycache__
