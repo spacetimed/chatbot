@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <utility>
+#include <map>
 
 std::vector<int> merge_pair(
     const std::vector<int> &token_ids,
@@ -30,20 +31,57 @@ std::vector<int> merge_pair(
     return result;
 }
 
-int main() {
-    std::vector<int> token_ids = {1, 2, 1, 2, 3};
-    std::pair<int, int> pair = {1, 2};
 
-    std::vector<int> result = merge_pair(
-        token_ids,
-        pair,
-        256
-    );
+std::map<std::pair<int, int>, int> count_pairs(
+    const std::vector<std::vector<int>> &pieces
+)
+{
+    // count pairs across multiple contiguous partitions (split by pre-tokenization)
+    // returns a map of [pair] -> freq
 
-    for (int token_id : result)
+    std::map<std::pair<int, int>, int> freq_map = {};
+
+    for (const std::vector<int> &piece : pieces) 
     {
-        std::cout << token_id << " ";
+        for (std::size_t i = 0; i+1 < piece.size(); i++) {
+            std::pair<int, int> pair = {piece[i], piece[i + 1]};
+            freq_map[pair] += 1;
+        }
     }
 
-    std::cout << "\n";
+    return freq_map;
+}
+
+std::pair<int, int> select_pair(
+    const std::map<std::pair<int, int>, int> &counts
+)
+{
+    // select the pair with the highest numerical frequency
+    // break ties based off smallest numerical value
+    std::pair<int, int> best_pair = counts.begin()->first; // first map entry key (pair)
+    int best_count = counts.begin()->second; // first map value (count)
+
+    for (const auto &pair_entry : counts)
+    {
+        std::pair<int, int> pair = pair_entry.first;
+        int count = pair_entry.second;
+
+        if (count > best_count || (count == best_count && pair < best_pair))
+        {
+            best_pair = pair;
+            best_count = count;
+        }
+    }
+
+    return best_pair;
+}
+
+int main() {
+    std::vector<std::vector<int>> pieces = {
+        {1, 2, 1, 2, 3}
+    };
+
+    std::map<std::pair<int, int>, int> counts = count_pairs(pieces);
+
+    std::cout << counts.at({1, 2}) << "\n";
 }
