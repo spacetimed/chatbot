@@ -1,7 +1,103 @@
+#define PCRE2_CODE_UNIT_WIDTH 8 // use 8-bit api for regex lib (utf-8)
+#include <pcre2.h>
+
 #include <iostream>
-#include <vector>
-#include <utility>
 #include <map>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+const char *GPT2_PATTERN = R"('s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)";
+
+std::vector<std::string> pretokenize(const std::string &text)
+{
+    // convert a plaintext string into partitions based off GPT2 pre-train regex pattern
+    // using PCRE2 because patterns like \p{L} \p{N} (unicode letters/numbers) not supported by c++'s standard regex
+
+    // example:
+    //  "Hello, world!" -> ["Hello", ",", " world", "!"]
+
+    std::vector<std::string> pieces;
+
+    // compile regex pattern, *pattern is a pointer to PCRE2's, compiled regex
+    int error_code;
+    PCRE2_SIZE error_offset;
+    pcre2_code *pattern = pcre2_compile(
+        reinterpret_cast<PCRE2_SPTR>(GPT2_PATTERN),
+        PCRE2_ZERO_TERMINATED,
+        PCRE2_UTF | PCRE2_UCP, // support aforementioned unicode properties
+        &error_code,
+        &error_offset,
+        nullptr
+    );
+
+    // ensure compilation successful
+    if (pattern == nullptr)
+        throw std::runtime_error("failed to compile GPT-2 pre-tokenization pattern");
+
+    // buffer to hold match information
+    pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(pattern, nullptr);
+    if (match_data == nullptr)
+    {
+        pcre2_code_free(pattern);
+        throw std::runtime_error("failed to allocate PCRE2 match data");
+    }
+
+    // our input (plaintext) into the compiled regex
+    PCRE2_SPTR subject = reinterpret_cast<PCRE2_SPTR>(text.data());
+    PCRE2_SIZE offset = 0;
+
+    // consume each byte of input
+    // this loop is basically doing python equivalent of:
+    /*
+    offset = 0
+    while offset < len(text):
+        match = pattern.match(text, pos=offset)
+        if match is None: raise RuntimeError()
+        pieces.append(text[match.start():match.end()])
+        offset = match.end()
+    */
+    while (offset < text.size())
+    {
+        int match_count = pcre2_match(
+            pattern,
+            subject,
+            text.size(),
+            offset,
+            PCRE2_ANCHORED,
+            match_data,
+            nullptr
+        );
+
+        if (match_count < 0)
+        {
+            pcre2_match_data_free(match_data);
+            pcre2_code_free(pattern);
+            throw std::runtime_error("GPT-2 pre-tokenization pattern did not preserve the input");
+        }
+
+        PCRE2_SIZE *match = pcre2_get_ovector_pointer(match_data);
+        PCRE2_SIZE start = match[0];
+        PCRE2_SIZE end = match[1];
+
+        if (start != offset || end == start)
+        {
+            pcre2_match_data_free(match_data);
+            pcre2_code_free(pattern);
+            throw std::runtime_error("invalid GPT-2 pre-tokenization match");
+        }
+
+        pieces.push_back(text.substr(start, end - start));
+        offset = end;
+    }
+
+    // free memory
+    pcre2_match_data_free(match_data);
+    pcre2_code_free(pattern);
+
+    return pieces;
+}
 
 std::vector<int> merge_pair(
     const std::vector<int> &token_ids,
@@ -76,12 +172,42 @@ std::pair<int, int> select_pair(
     return best_pair;
 }
 
+class BPETokenizer
+{
+
+public:
+    BPETokenizer(int vocab_size)
+    {
+        mergeable_vocab_size = vocab_size;
+    }
+
+    void train(std::vector<std::vector<int>> pieces)
+    {
+        merges.clear();
+
+        for (int new_token_id = 256; new_token_id < mergeable_vocab_size; new_token_id++)
+        {
+            std::map<std::pair<int, int>, int> counts = count_pairs(pieces);
+            if (counts.empty()) break;
+            std::pair<int, int> selected_pair = select_pair(counts);
+
+            for (std::vector<int> &piece : pieces)
+                piece = merge_pair(piece, selected_pair, new_token_id);
+
+            merges[selected_pair] = new_token_id;
+        }
+    }
+
+    const std::map<std::pair<int, int>, int> &get_merges() const
+    {
+        return merges;
+    }
+
+private:
+    int mergeable_vocab_size;
+    std::map<std::pair<int, int>, int> merges;
+};
+
 int main() {
-    std::vector<std::vector<int>> pieces = {
-        {1, 2, 1, 2, 3}
-    };
-
-    std::map<std::pair<int, int>, int> counts = count_pairs(pieces);
-
-    std::cout << counts.at({1, 2}) << "\n";
+    return 0;
 }
