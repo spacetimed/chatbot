@@ -26,14 +26,16 @@ An chatbot that visualizes different stages of an LLM. Built with privacy and ed
 
 - Preliminary: [Tokenizer specification that I wrote](docs/tokenizer.md)
     - The tokenizer will be created three times in each language: Python, C++, and Rust. 
+    - It will be similar to the GPT-2 tokenizer, such as using the same Regex pattern.
     - The Python one serves as a naive tokenizer implementation, whereas the C++ and Rust serve as optimized performant rewrites.
     - Results will be benchmarked, and the most optimal implementation will be used in production.
     - The C++ and Rust variants will need to deterministically create the same output as the Python baseline (tested through their artifacts).
     - Different low-level optimization techniques can be used in both the C++ and Rust variants (e.g. SIMD), so long as the same output is created as Python.
     - *Why?* Curiosity, optimization is fun. And because a tokenizer is simple enough that it provides a nice exercise to toy with other languages.
-- While working on the tokenizer, I upgraded the toy dataset from the Plato text used in Gradcore to streaming [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) with HuggingFace datasets. I still need to implement this new dataset into `train.py`.
+- While working on the tokenizer, I upgraded the toy dataset from the Plato text used in Gradcore to streaming [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) with HuggingFace datasets. 
 - I rewrote `tokenizer_driver.py` to serve as a harness for running different language tokenizer implementations.
 - I rewrote `tokenizer.py` (from my Gradcore repo) to be a naive and readable implementation for the C++ and Rust variants to follow. 
+- Moved dataset loading to `dataset_loader.py` so that both `train.py` and `tokenizer_driver.py` can stream HF datasets.
 
 ## Brainstorming
 
