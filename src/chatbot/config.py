@@ -14,7 +14,15 @@ class GPTConfig:
 
 @dataclass
 class TrainConfig:
-    dataset_path: Path = Path("datasets/plato.txt")
+    # support for hugging face datasets (instead of plato)
+    dataset_name: str = "HuggingFaceFW/fineweb-edu"
+    dataset_config: str = "sample-10BT"
+    dataset_split: str = "train"
+    dataset_revision: str = "v1.0.0"
+    dataset_bytes: int = 1_000_000
+    dataset_cache: Path = Path("datasets/fineweb_edu_1000000_bytes.jsonl")
+
+    tokenizer_path: Path = Path("artifacts/tokenizer/python/rules.json")
 
     checkpoint_dir: Path = Path("checkpoints")
     checkpoint_save_latest: bool = True
@@ -35,8 +43,6 @@ class TrainConfig:
     max_grad_norm: float = 1.0
 
     train_split: float = 0.9
-
-    tokenizer_vocab_size: int = 256
 
     # GPT-style AdamW configuration
     weight_decay: float = 0.1

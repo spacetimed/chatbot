@@ -6,6 +6,7 @@ from time import perf_counter
 import torch
 
 from chatbot.config import GPTConfig, TrainConfig
+from chatbot.dataset_loader import load_documents
 from chatbot.model import GPT
 from chatbot.tokenizer import BPETokenizer
 
@@ -114,28 +115,39 @@ def prepare_data(
     config: TrainConfig,
 ) -> tuple[BPETokenizer, torch.Tensor, torch.Tensor]:
     # returns three objects:
-    #   tokenizer:    trained BPETokenizer
+    #   tokenizer:    loaded BPETokenizer
     #   train_tokens: 1D CPU tensor containing training token IDs
     #   val_tokens:   1D CPU tensor containing the validation token IDs
 
     if not (0.0 < config.train_split < 1.0):
         raise ValueError("train_split must be within range (0,1)")
 
-    text = config.dataset_path.read_text(encoding="utf-8")
+    documents = load_documents(
+        dataset_name=config.dataset_name,
+        dataset_config=config.dataset_config,
+        dataset_split=config.dataset_split,
+        dataset_revision=config.dataset_revision,
+        cache_path=config.dataset_cache,
+        max_bytes=config.dataset_bytes,
+    )
 
-    if not text:
-        raise ValueError(f"dataset is empty: {config.dataset_path}")
+    split_index = int(len(documents) * config.train_split)
 
-    split_index = int(len(text) * config.train_split)  # index to split training/validation data
+    if split_index == 0 or split_index == len(documents):
+        raise ValueError("dataset must contain enough documents for training and validation splits")
 
-    train_text = text[:split_index]
-    val_text = text[split_index:]
+    train_documents = documents[:split_index]
+    val_documents = documents[split_index:]
 
-    tokenizer = BPETokenizer(config.tokenizer_vocab_size)
-    tokenizer.train(train_text)
+    document_separator = "<|endoftext|>"
+    train_text = document_separator.join(train_documents)
+    val_text = document_separator.join(val_documents)
 
-    train_token_ids = tokenizer.encode(train_text)
-    val_token_ids = tokenizer.encode(val_text)
+    tokenizer = BPETokenizer.load(config.tokenizer_path)
+    allowed_special = {document_separator}
+
+    train_token_ids = tokenizer.encode(train_text, allowed_special=allowed_special)
+    val_token_ids = tokenizer.encode(val_text, allowed_special=allowed_special)
 
     train_tokens = torch.tensor(
         train_token_ids,
@@ -213,7 +225,8 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     train_config_state = asdict(train_config)
-    train_config_state["dataset_path"] = str(train_config.dataset_path)
+    train_config_state["dataset_cache"] = str(train_config.dataset_cache)
+    train_config_state["tokenizer_path"] = str(train_config.tokenizer_path)
     train_config_state["checkpoint_dir"] = str(train_config.checkpoint_dir)
 
     checkpoint = {
@@ -325,7 +338,7 @@ def main() -> None:
 
     # model architecture
     model_config = GPTConfig(
-        vocab_size=len(tokenizer.vocab),
+        vocab_size=tokenizer.vocab_size,
         block_size=64,
         n_embed=64,
         n_head=4,
@@ -366,7 +379,7 @@ def main() -> None:
     print(f"device: {device}")
     print(f"training tokens: {len(train_tokens)}")
     print(f"validation tokens: {len(val_tokens)}")
-    print(f"vocab size: {len(tokenizer.vocab)}")
+    print(f"vocab size: {tokenizer.vocab_size}")
     print(f"parameters: {parameter_count:,}")
 
     best_val_loss = float("inf")

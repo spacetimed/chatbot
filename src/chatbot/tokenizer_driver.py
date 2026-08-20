@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+from chatbot.dataset_loader import load_documents
 from chatbot.tokenizer import BPETokenizer, read_tokens, write_tokens
 
 SPECIAL_TOKENS = (
@@ -64,64 +65,6 @@ def require_implementation(
         raise SystemExit(f"the {language} tokenizer is not implemented yet")
 
 
-def load_fineweb_corpus(
-    cache_path: Path,
-    max_bytes: int,
-) -> tuple[str, int, int]:
-
-    if max_bytes <= 0:
-        raise ValueError("dataset-bytes must be positive")
-
-    if cache_path.exists():
-        print(f"loading cached FineWeb-Edu corpus: {cache_path}")
-        documents = [json.loads(line)["text"] for line in cache_path.read_text(encoding="utf-8").splitlines()]
-        text = "\n\n".join(documents)
-        return text, len(documents), len(text.encode("utf-8"))
-
-    try:
-        from datasets import load_dataset
-    except ImportError as error:
-        raise SystemExit("install project dependencies with: python -m pip install -e .") from error
-
-    print(f"streaming up to {max_bytes:,} bytes from FineWeb-Edu...")
-
-    dataset = load_dataset(
-        FINEWEB_DATASET,
-        name=FINEWEB_CONFIG,
-        split="train",
-        revision=FINEWEB_REVISION,
-        streaming=True,
-    )
-
-    documents = []
-    total_bytes = 0
-
-    for example in dataset:
-        document = example["text"]
-        document_bytes = len(document.encode("utf-8"))
-
-        if not document:
-            continue
-
-        if documents and total_bytes + document_bytes > max_bytes:
-            break
-
-        documents.append(document)
-        total_bytes += document_bytes
-
-    if not documents:
-        raise ValueError("FineWeb-Edu stream returned no documents")
-
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with cache_path.open("w", encoding="utf-8") as cache_file:
-        for document in documents:
-            cache_file.write(json.dumps({"text": document}, ensure_ascii=False) + "\n")
-
-    text = "\n\n".join(documents)
-    return text, len(documents), len(text.encode("utf-8"))
-
-
 def run_train(
     args: argparse.Namespace,
 ) -> None:
@@ -130,10 +73,17 @@ def run_train(
 
     output_path = args.output or artifact_path(args.language, "rules.json")
     dataset_cache = args.dataset_cache or Path(f"datasets/fineweb_edu_{args.dataset_bytes}_bytes.jsonl")
-    text, document_count, input_bytes = load_fineweb_corpus(
-        dataset_cache,
-        args.dataset_bytes,
+    documents = load_documents(
+        dataset_name=FINEWEB_DATASET,
+        dataset_config=FINEWEB_CONFIG,
+        dataset_split="train",
+        dataset_revision=FINEWEB_REVISION,
+        cache_path=dataset_cache,
+        max_bytes=args.dataset_bytes,
     )
+    text = "\n\n".join(documents)
+    input_bytes = len(text.encode("utf-8"))
+
     tokenizer = BPETokenizer(
         args.vocab_size,
         create_special_tokens(args.vocab_size),
@@ -147,7 +97,7 @@ def run_train(
 
     print(f"dataset: {FINEWEB_DATASET}/{FINEWEB_CONFIG}")
     print(f"dataset cache: {dataset_cache}")
-    print(f"documents: {document_count:,}")
+    print(f"documents: {len(documents):,}")
     print(f"corpus bytes: {input_bytes:,}")
     print(f"saved rules: {output_path}")
     print(f"mergeable vocabulary size: {tokenizer.mergeable_vocab_size:,}")
@@ -166,7 +116,7 @@ def run_train(
                 "dataset_config": FINEWEB_CONFIG,
                 "dataset_revision": FINEWEB_REVISION,
                 "dataset_cache": str(dataset_cache),
-                "documents": document_count,
+                "documents": len(documents),
                 "input_bytes": input_bytes,
                 "mergeable_vocab_size": tokenizer.mergeable_vocab_size,
                 "vocab_size": tokenizer.vocab_size,
