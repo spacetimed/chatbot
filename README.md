@@ -2,6 +2,8 @@
 
 An chatbot that visualizes different stages of an LLM. Built with privacy and education in mind! 
 
+This project is an extension of my work in the [Gradcore](https://github.com/spacetimed/gradcore) repository, where I learned, designed, and implemented various language models, finally ending with a GPT-style transformer.
+
 ## Progress
 
 **Phase 0: Preliminary** — *Complete*

@@ -172,6 +172,14 @@ std::pair<int, int> select_pair(
     return best_pair;
 }
 
+std::vector<int> bytes_to_ids(const std::string &piece)
+{
+    std::vector<int> res;
+    for (unsigned char byte : piece) // "A" -> 65
+        res.push_back(byte); // convert byte from unsigned char to int
+    return res;
+}
+
 class BPETokenizer
 {
 
@@ -181,17 +189,26 @@ public:
         mergeable_vocab_size = vocab_size;
     }
 
-    void train(std::vector<std::vector<int>> pieces)
+    void train(const std::string &text)
     {
+
+        // pretokenize raw text into boundary-respecting chunks of strings
+        std::vector<std::string> str_pieces = pretokenize(text);
+
+        // convert all string chunks into integer chunks
+        std::vector<std::vector<int>> int_pieces;
+        for (const std::string &piece : str_pieces)
+            int_pieces.push_back(bytes_to_ids(piece));
+
         merges.clear();
 
         for (int new_token_id = 256; new_token_id < mergeable_vocab_size; new_token_id++)
         {
-            std::map<std::pair<int, int>, int> counts = count_pairs(pieces);
+            std::map<std::pair<int, int>, int> counts = count_pairs(int_pieces);
             if (counts.empty()) break;
             std::pair<int, int> selected_pair = select_pair(counts);
 
-            for (std::vector<int> &piece : pieces)
+            for (std::vector<int> &piece : int_pieces)
                 piece = merge_pair(piece, selected_pair, new_token_id);
 
             merges[selected_pair] = new_token_id;
@@ -208,6 +225,16 @@ private:
     std::map<std::pair<int, int>, int> merges;
 };
 
-int main() {
-    return 0;
+int main() 
+{
+    BPETokenizer tokenizer(260);
+    tokenizer.train("hello hello hello");
+
+    for (const auto &entry : tokenizer.get_merges())
+    {
+        std::pair<int, int> pair = entry.first;
+        int new_token_id = entry.second;
+        std::cout << pair.first << ", " << pair.second
+                  << " -> " << new_token_id << "\n";
+    }
 }
