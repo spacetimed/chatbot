@@ -10,6 +10,8 @@
 
 const char *GPT2_PATTERN = R"('s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)";
 
+// stateless helper functions
+
 std::vector<std::string> pretokenize(const std::string &text)
 {
     // convert a plaintext string into partitions based off GPT2 pre-train regex pattern
@@ -127,7 +129,6 @@ std::vector<int> merge_pair(
     return result;
 }
 
-
 std::map<std::pair<int, int>, int> count_pairs(
     const std::vector<std::vector<int>> &pieces
 )
@@ -183,42 +184,90 @@ std::vector<int> bytes_to_ids(const std::string &piece)
 class BPETokenizer
 {
 
+// callable from API
 public:
     BPETokenizer(int vocab_size)
     {
         mergeable_vocab_size = vocab_size;
+        reset_vocabulary();
     }
 
     void train(const std::string &text)
     {
+        // contract: take training corpus, learn BPE merge rules
 
-        // pretokenize raw text into boundary-respecting chunks of strings
+        // firstly pretokenize raw text to partition into exclusive groups to process
         std::vector<std::string> str_pieces = pretokenize(text);
 
-        // convert all string chunks into integer chunks
+        // convert all pre-tokenized string chunks into integer chunks
         std::vector<std::vector<int>> int_pieces;
         for (const std::string &piece : str_pieces)
             int_pieces.push_back(bytes_to_ids(piece));
 
         merges.clear();
+        reset_vocabulary();
 
+        // keep merging until populate tokens 256...mergeable_vocab_size-1 with merges
         for (int new_token_id = 256; new_token_id < mergeable_vocab_size; new_token_id++)
         {
             std::map<std::pair<int, int>, int> counts = count_pairs(int_pieces);
+
             if (counts.empty()) break;
+
+            // select highest frequency and lowest numerical value pair to merge
             std::pair<int, int> selected_pair = select_pair(counts);
 
+            // merge the full corpus
             for (std::vector<int> &piece : int_pieces)
                 piece = merge_pair(piece, selected_pair, new_token_id);
 
+            // add to merges and vocabulary
             merges[selected_pair] = new_token_id;
+            vocabulary.push_back(vocabulary[selected_pair.first] + vocabulary[selected_pair.second]); // vocab[token_id] -> original 2 chars (concatenated bytes)
         }
+
     }
 
     const std::map<std::pair<int, int>, int> &get_merges() const
     {
         return merges;
     }
+
+    std::vector<int> encode(const std::string &text) const
+    {
+        // turn raw plaintext into flat tokenized vector
+        std::vector<std::string> pieces = pretokenize(text); // raw text, partitioned into groups
+        std::vector<int> token_ids;
+  
+        for (const std::string &piece : pieces) // for each group
+        {
+            std::vector<int> piece_token_ids = encode_piece(piece); // piece -> merged piece
+            token_ids.insert(
+                token_ids.end(),
+                piece_token_ids.begin(),
+                piece_token_ids.end()
+            );
+        }
+  
+        return token_ids;
+    }
+
+    std::string decode(const std::vector<int> &token_ids) const
+    {
+        // turn flat tokenized vector into raw plaintext
+        std::string text;
+
+        for (int token_id : token_ids) text += vocabulary.at(token_id);
+
+        return text;
+    }
+
+// state-dependent helper functions
+private:
+    int mergeable_vocab_size;
+    std::map<std::pair<int, int>, int> merges;
+    std::vector<std::string> vocabulary;
+
 
     std::vector<int> encode_piece(const std::string &piece) const
     {
@@ -263,10 +312,18 @@ public:
         return token_ids;
     }
 
+    void reset_vocabulary()
+    {
+        // clear vocab and populate 0...255 with base vocab
+        vocabulary.clear();
+  
+        for (int token_id = 0; token_id < 256; token_id++)
+        {
+            std::string byte(1, static_cast<char>(token_id));
+            vocabulary.push_back(byte);
+        }
+    }
 
-private:
-    int mergeable_vocab_size;
-    std::map<std::pair<int, int>, int> merges;
 };
 
 int main() 
@@ -281,4 +338,7 @@ int main()
         std::cout << pair.first << ", " << pair.second
                   << " -> " << new_token_id << "\n";
     }
+
+    std::vector<int> token_ids = tokenizer.encode("hello hello hello");
+    std::cout << tokenizer.decode(token_ids) << "\n";
 }
