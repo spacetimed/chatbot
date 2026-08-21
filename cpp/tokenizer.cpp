@@ -220,6 +220,50 @@ public:
         return merges;
     }
 
+    std::vector<int> encode_piece(const std::string &piece) const
+    {
+        // pretokenize(input text) -> pieces -> encode_piece(piece), ...
+        //   takes one pre-tokenized piece (string), converts it to token ID's using existing learned merge rules
+        std::vector<int> token_ids = bytes_to_ids(piece); // convert string to list of id's
+
+        // algorithm repeatedly scans entire sequence, checks all adjacent pairs against learned merge rules
+        // tracks the lowest token ID (rule learned earliest) till end of string, merges that, repeats
+
+        while (token_ids.size() >= 2)
+        {
+            std::pair<int, int> selected_pair;
+            int selected_token_id = -1;
+
+            // find the applicable pair whose rule was learned earliest
+            // select all pairs, and find merge rule with lowest token ID. 
+            for (std::size_t i = 0; i+1 < token_ids.size(); i++)
+            {
+                std::pair<int, int> current_pair = {token_ids[i], token_ids[i+1]};
+
+                // if this current pair is not in our merge rules, skip
+                if (!merges.contains(current_pair)) continue;
+
+                int current_token_id = merges.at(current_pair);
+
+                // smaller token ID means the rule was learned earlier
+                // if first candidate, or smaller than current candidate
+                if (selected_token_id == -1 || current_token_id < selected_token_id)
+                {
+                    selected_pair = current_pair;
+                    selected_token_id = current_token_id;
+                }
+            }
+
+            // no learned merge rule applied and we've reached end of input
+            if (selected_token_id == -1) break;
+
+            token_ids = merge_pair(token_ids, selected_pair, selected_token_id);
+        }
+        
+        return token_ids;
+    }
+
+
 private:
     int mergeable_vocab_size;
     std::map<std::pair<int, int>, int> merges;
