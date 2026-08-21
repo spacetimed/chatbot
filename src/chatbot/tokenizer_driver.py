@@ -4,8 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+import numpy as np
+
 from chatbot.dataset_loader import load_documents
-from chatbot.tokenizer import BPETokenizer, read_tokens, write_tokens
+from chatbot.tokenizer import BPETokenizer
 
 SPECIAL_TOKENS = (
     "<|endoftext|>",
@@ -22,6 +24,33 @@ FINEWEB_REVISION = "v1.0.0"
 TOKENIZER_ARTIFACTS = Path("artifacts/tokenizer")
 TOKENIZER_LANGUAGES = ("python", "cpp", "rust")
 BENCHMARK_RESULTS = TOKENIZER_ARTIFACTS / "benchmarks/results.jsonl"
+
+
+class TokenizerIO:
+    @staticmethod
+    def save_rules(path: Path, state: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def load_rules(path: Path) -> dict:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def save_tokens(path: Path, token_ids: list[int]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.asarray(token_ids, dtype="<u4").tofile(path)
+
+    @staticmethod
+    def load_tokens(path: Path) -> list[int]:
+        if path.stat().st_size % 4 != 0:
+            raise ValueError("tokens.bin size must be divisible by four bytes")
+        return np.fromfile(path, dtype="<u4").tolist()
+
+    @staticmethod
+    def save_decoded(path: Path, decoded: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(decoded)
 
 
 def create_artifact_directories() -> None:
@@ -93,7 +122,7 @@ def run_train(
     tokenizer.train(text)
     elapsed = perf_counter() - start_time
 
-    tokenizer.save(output_path)
+    TokenizerIO.save_rules(output_path, tokenizer.to_dict())
 
     print(f"dataset: {FINEWEB_DATASET}/{FINEWEB_CONFIG}")
     print(f"dataset cache: {dataset_cache}")
@@ -136,7 +165,7 @@ def run_encode(
 
     rules_path = args.rules or artifact_path(args.language, "rules.json")
     output_path = args.output or artifact_path(args.language, "tokens.bin")
-    tokenizer = BPETokenizer.load(rules_path)
+    tokenizer = BPETokenizer.from_dict(TokenizerIO.load_rules(rules_path))
     text = args.input.read_text(encoding="utf-8")
 
     start_time = perf_counter()
@@ -146,7 +175,7 @@ def run_encode(
     )
     elapsed = perf_counter() - start_time
 
-    write_tokens(output_path, token_ids)
+    TokenizerIO.save_tokens(output_path, token_ids)
 
     print(f"saved tokens: {output_path}")
     print(f"tokens: {len(token_ids):,}")
@@ -179,15 +208,14 @@ def run_decode(
 
     rules_path = args.rules or artifact_path(args.language, "rules.json")
     output_path = args.output or artifact_path(args.language, "decoded.txt")
-    tokenizer = BPETokenizer.load(rules_path)
-    token_ids = read_tokens(args.input)
+    tokenizer = BPETokenizer.from_dict(TokenizerIO.load_rules(rules_path))
+    token_ids = TokenizerIO.load_tokens(args.input)
 
     start_time = perf_counter()
     decoded = tokenizer.decode_bytes(token_ids)
     elapsed = perf_counter() - start_time
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(decoded)
+    TokenizerIO.save_decoded(output_path, decoded)
 
     print(f"saved text: {output_path}")
     print(f"decoded bytes: {len(decoded):,}")

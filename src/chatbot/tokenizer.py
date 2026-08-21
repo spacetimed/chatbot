@@ -1,8 +1,5 @@
-import json
 from itertools import pairwise
-from pathlib import Path
 
-import numpy as np
 import regex
 
 # tokenizer spec information: ./docs/tokenizer.md
@@ -15,7 +12,7 @@ GPT2_PATTERN_TEXT = r"'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\
 GPT2_PATTERN = regex.compile(GPT2_PATTERN_TEXT)
 
 
-# helper functions (pretokenize, count_pairs, merge_pair, write_tokens, read_tokens)
+# helper functions
 def pretokenize(
     text: str,
 ) -> list[str]:
@@ -58,30 +55,6 @@ def merge_pair(
             index += 1
 
     return merged
-
-
-def write_tokens(
-    path: Path,
-    token_ids: list[int],
-) -> None:
-
-    # writes already-encoded token IDs to a binary file
-
-    tokens = np.asarray(token_ids, dtype="<u4")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tokens.tofile(path)
-
-
-def read_tokens(
-    path: Path,
-) -> list[int]:
-
-    # same as write_tokens but reversed
-
-    if path.stat().st_size % 4 != 0:
-        raise ValueError("tokens.bin size must be divisible by four bytes")
-
-    return np.fromfile(path, dtype="<u4").tolist()
 
 
 class BPETokenizer:
@@ -260,22 +233,6 @@ class BPETokenizer:
             tokenizer.vocab[new_token] = tokenizer.vocab[left_token] + tokenizer.vocab[right_token]
 
         return tokenizer
-
-    def save(
-        self,
-        path: Path,
-    ) -> None:
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    @classmethod
-    def load(
-        cls,
-        path: Path,
-    ) -> "BPETokenizer":
-
-        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def _reset_vocab(
         self,

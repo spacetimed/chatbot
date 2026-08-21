@@ -1,6 +1,7 @@
 import struct
 
-from chatbot.tokenizer import BPETokenizer, pretokenize, read_tokens, write_tokens
+from chatbot.tokenizer import BPETokenizer, pretokenize
+from chatbot.tokenizer_driver import TokenizerIO
 
 # some basic tests to ensure our python tokenizer works fine
 
@@ -57,8 +58,8 @@ def test_tokenizer_json_round_trip(tmp_path):
     tokenizer.train("abab abab")
     artifact_path = tmp_path / "rules.json"
 
-    tokenizer.save(artifact_path)
-    loaded = BPETokenizer.load(artifact_path)
+    TokenizerIO.save_rules(artifact_path, tokenizer.to_dict())
+    loaded = BPETokenizer.from_dict(TokenizerIO.load_rules(artifact_path))
 
     assert loaded.to_dict() == tokenizer.to_dict()
     assert loaded.encode("abab") == [257]
@@ -69,7 +70,7 @@ def test_binary_token_round_trip(tmp_path):
     token_ids = [1, 256, 50_260]
     artifact_path = tmp_path / "tokens.bin"
 
-    write_tokens(artifact_path, token_ids)
+    TokenizerIO.save_tokens(artifact_path, token_ids)
 
     assert artifact_path.read_bytes() == struct.pack("<III", *token_ids)
-    assert read_tokens(artifact_path) == token_ids
+    assert TokenizerIO.load_tokens(artifact_path) == token_ids

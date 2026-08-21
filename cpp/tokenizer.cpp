@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -186,9 +187,32 @@ class BPETokenizer
 
 // callable from API
 public:
-    BPETokenizer(int vocab_size)
+    BPETokenizer(int mergeable_vocab_size, const std::map<std::string, int> &special_tokens = {})
     {
-        mergeable_vocab_size = vocab_size;
+        if (mergeable_vocab_size < 256)
+            throw std::invalid_argument("mergeable_vocab_size must be at least 256");
+
+        this->mergeable_vocab_size = mergeable_vocab_size;
+        this->special_tokens = special_tokens;
+        vocab_size = mergeable_vocab_size + special_tokens.size();
+
+        std::set<int> expected_special_ids;
+        std::set<int> actual_special_ids;
+
+        for (int token_id = mergeable_vocab_size; token_id < vocab_size; token_id++)
+            expected_special_ids.insert(token_id);
+
+        for (const std::pair<const std::string, int> &special_token : special_tokens)
+        {
+            if (special_token.first.empty())
+                throw std::invalid_argument("special tokens cannot be empty");
+
+            actual_special_ids.insert(special_token.second);
+        }
+
+        if (actual_special_ids != expected_special_ids)
+            throw std::invalid_argument("special token IDs must begin after the mergeable vocabulary");
+
         reset_vocabulary();
     }
 
@@ -223,7 +247,7 @@ public:
 
             // add to merges and vocabulary
             merges[selected_pair] = new_token_id;
-            vocabulary.push_back(vocabulary[selected_pair.first] + vocabulary[selected_pair.second]); // vocab[token_id] -> original 2 chars (concatenated bytes)
+            vocabulary[new_token_id] = vocabulary[selected_pair.first] + vocabulary[selected_pair.second]; // vocabulary[token_id] -> represented byte sequence
         }
 
     }
@@ -233,22 +257,50 @@ public:
         return merges;
     }
 
-    std::vector<int> encode(const std::string &text) const
+    std::vector<int> encode(const std::string &text, const std::set<std::string> &allowed_special = {}) const
     {
-        // turn raw plaintext into flat tokenized vector
-        std::vector<std::string> pieces = pretokenize(text); // raw text, partitioned into groups
-        std::vector<int> token_ids;
-  
-        for (const std::string &piece : pieces) // for each group
+        // special tokens bypass pre-tokenization and BPE only when explicitly allowed
+        for (const std::string &special_token : allowed_special)
         {
-            std::vector<int> piece_token_ids = encode_piece(piece); // piece -> merged piece
-            token_ids.insert(
-                token_ids.end(),
-                piece_token_ids.begin(),
-                piece_token_ids.end()
-            );
+            if (!special_tokens.contains(special_token))
+                throw std::invalid_argument("unknown special token: " + special_token);
         }
-  
+
+        if (allowed_special.empty()) return encode_ordinary(text);
+
+        std::vector<int> token_ids;
+        std::size_t ordinary_start = 0;
+        std::size_t position = 0;
+
+        while (position < text.size())
+        {
+            std::string matched_special;
+
+            for (const std::string &special_token : allowed_special)
+            {
+                bool matches = text.compare(position, special_token.size(), special_token) == 0;
+
+                if (matches && special_token.size() > matched_special.size())
+                    matched_special = special_token;
+            }
+
+            if (matched_special.empty())
+            {
+                position++;
+                continue;
+            }
+
+            std::vector<int> ordinary_ids = encode_ordinary(text.substr(ordinary_start, position - ordinary_start));
+            for (int token_id : ordinary_ids) token_ids.push_back(token_id);
+
+            token_ids.push_back(special_tokens.at(matched_special));
+            position += matched_special.size();
+            ordinary_start = position;
+        }
+
+        std::vector<int> ordinary_ids = encode_ordinary(text.substr(ordinary_start));
+        for (int token_id : ordinary_ids) token_ids.push_back(token_id);
+
         return token_ids;
     }
 
@@ -265,9 +317,25 @@ public:
 // state-dependent helper functions
 private:
     int mergeable_vocab_size;
+    int vocab_size;
     std::map<std::pair<int, int>, int> merges;
+    std::map<std::string, int> special_tokens;
     std::vector<std::string> vocabulary;
 
+    std::vector<int> encode_ordinary(const std::string &text) const
+    {
+        // turn ordinary raw text into a flat tokenized vector
+        std::vector<std::string> pieces = pretokenize(text);
+        std::vector<int> token_ids;
+
+        for (const std::string &piece : pieces)
+        {
+            std::vector<int> piece_token_ids = encode_piece(piece);
+            for (int token_id : piece_token_ids) token_ids.push_back(token_id);
+        }
+
+        return token_ids;
+    }
 
     std::vector<int> encode_piece(const std::string &piece) const
     {
@@ -314,21 +382,22 @@ private:
 
     void reset_vocabulary()
     {
-        // clear vocab and populate 0...255 with base vocab
-        vocabulary.clear();
+        // populate base bytes, reserve learned-token slots, and add special tokens
+        vocabulary.assign(vocab_size, "");
   
         for (int token_id = 0; token_id < 256; token_id++)
-        {
-            std::string byte(1, static_cast<char>(token_id));
-            vocabulary.push_back(byte);
-        }
+            vocabulary[token_id] = std::string(1, static_cast<char>(token_id));
+
+        for (const std::pair<const std::string, int> &special_token : special_tokens)
+            vocabulary[special_token.second] = special_token.first;
     }
 
 };
 
 int main() 
 {
-    BPETokenizer tokenizer(260);
+    std::map<std::string, int> special_tokens = {{"<|endoftext|>", 260}};
+    BPETokenizer tokenizer(260, special_tokens);
     tokenizer.train("hello hello hello");
 
     for (const auto &entry : tokenizer.get_merges())
@@ -339,6 +408,7 @@ int main()
                   << " -> " << new_token_id << "\n";
     }
 
-    std::vector<int> token_ids = tokenizer.encode("hello hello hello");
+    std::set<std::string> allowed_special = {"<|endoftext|>"};
+    std::vector<int> token_ids = tokenizer.encode("hello<|endoftext|>hello", allowed_special);
     std::cout << tokenizer.decode(token_ids) << "\n";
 }

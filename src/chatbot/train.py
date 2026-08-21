@@ -9,6 +9,7 @@ from chatbot.config import GPTConfig, TrainConfig
 from chatbot.dataset_loader import load_documents
 from chatbot.model import GPT
 from chatbot.tokenizer import BPETokenizer
+from chatbot.tokenizer_driver import TokenizerIO
 
 
 # TokenBatchLoader will take a long token stream, select chunks containing BxT+1 tokens, and reshape them into B sequences of length T
@@ -143,7 +144,7 @@ def prepare_data(
     train_text = document_separator.join(train_documents)
     val_text = document_separator.join(val_documents)
 
-    tokenizer = BPETokenizer.load(config.tokenizer_path)
+    tokenizer = BPETokenizer.from_dict(TokenizerIO.load_rules(config.tokenizer_path))
     allowed_special = {document_separator}
 
     train_token_ids = tokenizer.encode(train_text, allowed_special=allowed_special)
