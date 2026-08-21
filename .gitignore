@@ -8,12 +8,14 @@ references/*
 .DS_Store
 .swp
 /cpp/tokenizer
+/src/chatbot/_tokenizer_cpp*.so
 
 # project-specific
 artifacts/*
 checkpoints/*
 logs/*
 datasets/*
+.ipynb_checkpoints/
 
 # bloat
 __pycache__

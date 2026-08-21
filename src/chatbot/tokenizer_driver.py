@@ -1,7 +1,9 @@
 import argparse
 import json
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
+from statistics import median
 from time import perf_counter
 
 import numpy as np
@@ -23,7 +25,7 @@ FINEWEB_REVISION = "v1.0.0"
 
 TOKENIZER_ARTIFACTS = Path("artifacts/tokenizer")
 TOKENIZER_LANGUAGES = ("python", "cpp", "rust")
-BENCHMARK_RESULTS = TOKENIZER_ARTIFACTS / "benchmarks/results.jsonl"
+BENCHMARK_RESULTS = Path("benchmarks/benchmarks.jsonl")
 
 
 class TokenizerIO:
@@ -57,7 +59,6 @@ def create_artifact_directories() -> None:
     # create artifacts/{python,cpp,rust} if they do not exist
     for language in TOKENIZER_LANGUAGES:
         (TOKENIZER_ARTIFACTS / language).mkdir(parents=True, exist_ok=True)
-    BENCHMARK_RESULTS.parent.mkdir(parents=True, exist_ok=True)
 
 
 def artifact_path(
@@ -70,6 +71,7 @@ def artifact_path(
 def log_benchmark(
     result: dict,
 ) -> None:
+    BENCHMARK_RESULTS.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
         **result,
@@ -86,19 +88,26 @@ def create_special_tokens(
     return {token: mergeable_vocab_size + index for index, token in enumerate(SPECIAL_TOKENS)}
 
 
-def require_implementation(
+def get_tokenizer_implementation(
     language: str,
-) -> None:
+) -> type:
 
-    if language != "python":
-        raise SystemExit(f"the {language} tokenizer is not implemented yet")
+    if language == "python":
+        return BPETokenizer
+
+    if language == "cpp":
+        from chatbot._tokenizer_cpp import BPETokenizer as CppBPETokenizer
+
+        return CppBPETokenizer
+
+    raise SystemExit(f"the {language} tokenizer is not implemented yet")
 
 
 def run_train(
     args: argparse.Namespace,
 ) -> None:
 
-    require_implementation(args.language)
+    Tokenizer = get_tokenizer_implementation(args.language)
 
     output_path = args.output or artifact_path(args.language, "rules.json")
     dataset_cache = args.dataset_cache or Path(f"datasets/fineweb_edu_{args.dataset_bytes}_bytes.jsonl")
@@ -111,16 +120,21 @@ def run_train(
         max_bytes=args.dataset_bytes,
     )
     text = "\n\n".join(documents)
-    input_bytes = len(text.encode("utf-8"))
+    corpus = text.encode("utf-8")
+    input_bytes = len(corpus)
 
-    tokenizer = BPETokenizer(
-        args.vocab_size,
-        create_special_tokens(args.vocab_size),
-    )
+    repetitions = args.repeat if args.benchmark else 1
+    elapsed_seconds = []
 
-    start_time = perf_counter()
-    tokenizer.train(text)
-    elapsed = perf_counter() - start_time
+    for _ in range(repetitions):
+        tokenizer = Tokenizer(
+            args.vocab_size,
+            create_special_tokens(args.vocab_size),
+        )
+
+        start_time = perf_counter()
+        tokenizer.train(text)
+        elapsed_seconds.append(perf_counter() - start_time)
 
     TokenizerIO.save_rules(output_path, tokenizer.to_dict())
 
@@ -134,11 +148,13 @@ def run_train(
     print(f"total vocabulary size: {tokenizer.vocab_size:,}")
 
     if args.benchmark:
-        throughput = input_bytes / elapsed
-        print(f"training time: {elapsed:.4f}s")
+        median_elapsed = median(elapsed_seconds)
+        throughput = input_bytes / median_elapsed
+        print(f"training median: {median_elapsed:.4f}s across {args.repeat} repetitions")
         print(f"training throughput: {throughput:,.0f} bytes/s")
         log_benchmark(
             {
+                "label": args.label,
                 "operation": "train",
                 "language": args.language,
                 "dataset": FINEWEB_DATASET,
@@ -147,11 +163,16 @@ def run_train(
                 "dataset_cache": str(dataset_cache),
                 "documents": len(documents),
                 "input_bytes": input_bytes,
+                "input_sha256": sha256(corpus).hexdigest(),
                 "mergeable_vocab_size": tokenizer.mergeable_vocab_size,
                 "vocab_size": tokenizer.vocab_size,
                 "learned_merges": len(tokenizer.merges),
-                "elapsed_seconds": elapsed,
-                "throughput_bytes_per_second": throughput,
+                "repeat": args.repeat,
+                "elapsed_seconds": elapsed_seconds,
+                "minimum_seconds": min(elapsed_seconds),
+                "median_seconds": median_elapsed,
+                "maximum_seconds": max(elapsed_seconds),
+                "median_throughput_bytes_per_second": throughput,
                 "output": str(output_path),
             }
         )
@@ -161,19 +182,27 @@ def run_encode(
     args: argparse.Namespace,
 ) -> None:
 
-    require_implementation(args.language)
+    Tokenizer = get_tokenizer_implementation(args.language)
 
     rules_path = args.rules or artifact_path(args.language, "rules.json")
     output_path = args.output or artifact_path(args.language, "tokens.bin")
-    tokenizer = BPETokenizer.from_dict(TokenizerIO.load_rules(rules_path))
+    tokenizer = Tokenizer.from_dict(TokenizerIO.load_rules(rules_path))
     text = args.input.read_text(encoding="utf-8")
+    encoded_text = text.encode("utf-8")
+    allowed_special = set(args.allow_special)
+    repetitions = args.repeat if args.benchmark else 1
+    elapsed_seconds = []
 
-    start_time = perf_counter()
-    token_ids = tokenizer.encode(
-        text,
-        allowed_special=set(args.allow_special),
-    )
-    elapsed = perf_counter() - start_time
+    if args.benchmark:
+        tokenizer.encode(text, allowed_special=allowed_special)
+
+    for _ in range(repetitions):
+        start_time = perf_counter()
+        token_ids = tokenizer.encode(
+            text,
+            allowed_special=allowed_special,
+        )
+        elapsed_seconds.append(perf_counter() - start_time)
 
     TokenizerIO.save_tokens(output_path, token_ids)
 
@@ -181,20 +210,27 @@ def run_encode(
     print(f"tokens: {len(token_ids):,}")
 
     if args.benchmark:
-        input_bytes = len(text.encode("utf-8"))
-        throughput = input_bytes / elapsed
-        print(f"encoding time: {elapsed:.4f}s")
+        input_bytes = len(encoded_text)
+        median_elapsed = median(elapsed_seconds)
+        throughput = input_bytes / median_elapsed
+        print(f"encoding median: {median_elapsed:.4f}s across {args.repeat} repetitions")
         print(f"encoding throughput: {throughput:,.0f} bytes/s")
         log_benchmark(
             {
+                "label": args.label,
                 "operation": "encode",
                 "language": args.language,
                 "input": str(args.input),
                 "input_bytes": input_bytes,
+                "input_sha256": sha256(encoded_text).hexdigest(),
                 "tokens": len(token_ids),
                 "rules": str(rules_path),
-                "elapsed_seconds": elapsed,
-                "throughput_bytes_per_second": throughput,
+                "repeat": args.repeat,
+                "elapsed_seconds": elapsed_seconds,
+                "minimum_seconds": min(elapsed_seconds),
+                "median_seconds": median_elapsed,
+                "maximum_seconds": max(elapsed_seconds),
+                "median_throughput_bytes_per_second": throughput,
                 "output": str(output_path),
             }
         )
@@ -204,16 +240,23 @@ def run_decode(
     args: argparse.Namespace,
 ) -> None:
 
-    require_implementation(args.language)
+    Tokenizer = get_tokenizer_implementation(args.language)
 
     rules_path = args.rules or artifact_path(args.language, "rules.json")
     output_path = args.output or artifact_path(args.language, "decoded.txt")
-    tokenizer = BPETokenizer.from_dict(TokenizerIO.load_rules(rules_path))
+    tokenizer = Tokenizer.from_dict(TokenizerIO.load_rules(rules_path))
     token_ids = TokenizerIO.load_tokens(args.input)
+    encoded_tokens = args.input.read_bytes()
+    repetitions = args.repeat if args.benchmark else 1
+    elapsed_seconds = []
 
-    start_time = perf_counter()
-    decoded = tokenizer.decode_bytes(token_ids)
-    elapsed = perf_counter() - start_time
+    if args.benchmark:
+        tokenizer.decode_bytes(token_ids)
+
+    for _ in range(repetitions):
+        start_time = perf_counter()
+        decoded = tokenizer.decode_bytes(token_ids)
+        elapsed_seconds.append(perf_counter() - start_time)
 
     TokenizerIO.save_decoded(output_path, decoded)
 
@@ -221,19 +264,27 @@ def run_decode(
     print(f"decoded bytes: {len(decoded):,}")
 
     if args.benchmark:
-        throughput = len(decoded) / elapsed
-        print(f"decoding time: {elapsed:.4f}s")
+        median_elapsed = median(elapsed_seconds)
+        throughput = len(decoded) / median_elapsed
+        print(f"decoding median: {median_elapsed:.4f}s across {args.repeat} repetitions")
         print(f"decoding throughput: {throughput:,.0f} bytes/s")
         log_benchmark(
             {
+                "label": args.label,
                 "operation": "decode",
                 "language": args.language,
                 "input": str(args.input),
+                "input_sha256": sha256(encoded_tokens).hexdigest(),
                 "tokens": len(token_ids),
                 "decoded_bytes": len(decoded),
+                "decoded_sha256": sha256(decoded).hexdigest(),
                 "rules": str(rules_path),
-                "elapsed_seconds": elapsed,
-                "throughput_bytes_per_second": throughput,
+                "repeat": args.repeat,
+                "elapsed_seconds": elapsed_seconds,
+                "minimum_seconds": min(elapsed_seconds),
+                "median_seconds": median_elapsed,
+                "maximum_seconds": max(elapsed_seconds),
+                "median_throughput_bytes_per_second": throughput,
                 "output": str(output_path),
             }
         )
@@ -254,6 +305,13 @@ def create_parser() -> argparse.ArgumentParser:
     common_parser.add_argument(
         "--benchmark",
         action="store_true",
+    )
+    common_parser.add_argument(
+        "--repeat",
+        type=int,
+    )
+    common_parser.add_argument(
+        "--label",
     )
     train_parser = subparsers.add_parser(
         "train",
@@ -312,6 +370,16 @@ def create_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = create_parser()
     args = parser.parse_args()
+
+    if args.benchmark and args.repeat is None:
+        parser.error("--repeat is required with --benchmark")
+    if args.benchmark and args.repeat <= 0:
+        parser.error("--repeat must be positive")
+    if args.benchmark and args.label is None:
+        parser.error("--label is required with --benchmark")
+    if not args.benchmark and (args.repeat is not None or args.label is not None):
+        parser.error("--repeat and --label require --benchmark")
+
     create_artifact_directories()
     args.run(args)
 

@@ -1,18 +1,21 @@
 CXX := clang++
-CXXFLAGS := -std=c++20 $(shell pkg-config --cflags libpcre2-8)
+CXXFLAGS := -std=c++20 -O3 $(shell pkg-config --cflags libpcre2-8)
 LDLIBS := $(shell pkg-config --libs libpcre2-8)
 
-SOURCE := tokenizer.cpp
+SOURCES := tokenizer.cpp main.cpp
 TARGET := ../artifacts/tokenizer/cpp/tokenizer
 
-$(TARGET): $(SOURCE)
+$(TARGET): $(SOURCES) tokenizer.hpp
 	mkdir -p $(dir $(TARGET))
-	$(CXX) $(CXXFLAGS) $(SOURCE) $(LDLIBS) -o $(TARGET)
+	$(CXX) $(CXXFLAGS) $(SOURCES) $(LDLIBS) -o $(TARGET)
 
 run: $(TARGET)
 	$(TARGET)
 
+extension:
+	cd .. && .venv/bin/python -m pip install -e .
+
 clean:
 	rm -f $(TARGET)
 
-.PHONY: run clean
+.PHONY: run extension clean

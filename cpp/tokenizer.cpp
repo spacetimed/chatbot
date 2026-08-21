@@ -1,45 +1,36 @@
 #define PCRE2_CODE_UNIT_WIDTH 8 // use 8-bit api for regex lib (utf-8)
 #include <pcre2.h>
 
-#include <iostream>
-#include <map>
-#include <set>
-#include <stdexcept>
-#include <string>
-#include <utility>
-#include <vector>
+#include "tokenizer.hpp"
 
-const char *GPT2_PATTERN = R"('s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}]+| ?[\p{N}]+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)";
+#include <algorithm>
+#include <stdexcept>
+
+namespace
+{
 
 // stateless helper functions
 
 std::vector<std::string> pretokenize(const std::string &text)
 {
-    // convert a plaintext string into partitions based off GPT2 pre-train regex pattern
-    // using PCRE2 because patterns like \p{L} \p{N} (unicode letters/numbers) not supported by c++'s standard regex
-
-    // example:
-    //  "Hello, world!" -> ["Hello", ",", " world", "!"]
-
+    // convert plaintext into partitions based off the GPT-2 pre-tokenization regex
+    // PCRE2 supports unicode properties such as \p{L} and \p{N}, unlike c++'s standard regex
     std::vector<std::string> pieces;
 
-    // compile regex pattern, *pattern is a pointer to PCRE2's, compiled regex
     int error_code;
     PCRE2_SIZE error_offset;
     pcre2_code *pattern = pcre2_compile(
-        reinterpret_cast<PCRE2_SPTR>(GPT2_PATTERN),
+        reinterpret_cast<PCRE2_SPTR>(GPT2_PATTERN_TEXT),
         PCRE2_ZERO_TERMINATED,
-        PCRE2_UTF | PCRE2_UCP, // support aforementioned unicode properties
+        PCRE2_UTF | PCRE2_UCP,
         &error_code,
         &error_offset,
         nullptr
     );
 
-    // ensure compilation successful
     if (pattern == nullptr)
         throw std::runtime_error("failed to compile GPT-2 pre-tokenization pattern");
 
-    // buffer to hold match information
     pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(pattern, nullptr);
     if (match_data == nullptr)
     {
@@ -47,20 +38,9 @@ std::vector<std::string> pretokenize(const std::string &text)
         throw std::runtime_error("failed to allocate PCRE2 match data");
     }
 
-    // our input (plaintext) into the compiled regex
     PCRE2_SPTR subject = reinterpret_cast<PCRE2_SPTR>(text.data());
     PCRE2_SIZE offset = 0;
 
-    // consume each byte of input
-    // this loop is basically doing python equivalent of:
-    /*
-    offset = 0
-    while offset < len(text):
-        match = pattern.match(text, pos=offset)
-        if match is None: raise RuntimeError()
-        pieces.append(text[match.start():match.end()])
-        offset = match.end()
-    */
     while (offset < text.size())
     {
         int match_count = pcre2_match(
@@ -95,34 +75,28 @@ std::vector<std::string> pretokenize(const std::string &text)
         offset = end;
     }
 
-    // free memory
     pcre2_match_data_free(match_data);
     pcre2_code_free(pattern);
 
     return pieces;
 }
 
-std::vector<int> merge_pair(
-    const std::vector<int> &token_ids,
-    std::pair<int, int> pair,
-    int new_token_id
-) 
+std::vector<int> merge_pair(const std::vector<int> &token_ids, std::pair<int, int> pair, int new_token_id)
 {
-    // replaces every non-overlapping adjacent pair with new_token_id (left-to-right) if that pair matches our input pattern
-
+    // replace every non-overlapping adjacent pair with new_token_id from left to right
     std::vector<int> result;
     std::size_t i = 0;
 
     while (i < token_ids.size())
     {
-        if ((i+1 < token_ids.size()) 
-             && (token_ids[i] == pair.first) 
-             && (token_ids[i+1] == pair.second))
+        if (i + 1 < token_ids.size() && token_ids[i] == pair.first && token_ids[i + 1] == pair.second)
         {
-            result.push_back(new_token_id); // match! add merged token
+            result.push_back(new_token_id);
             i += 2;
-        } else {
-            result.push_back(token_ids[i]); // no match. add token normally
+        }
+        else
+        {
+            result.push_back(token_ids[i]);
             i += 1;
         }
     }
@@ -130,39 +104,33 @@ std::vector<int> merge_pair(
     return result;
 }
 
-std::map<std::pair<int, int>, int> count_pairs(
-    const std::vector<std::vector<int>> &pieces
-)
+std::map<std::pair<int, int>, int> count_pairs(const std::vector<std::vector<int>> &pieces)
 {
-    // count pairs across multiple contiguous partitions (split by pre-tokenization)
-    // returns a map of [pair] -> freq
+    // count adjacent pairs across multiple pre-tokenized partitions
+    std::map<std::pair<int, int>, int> counts;
 
-    std::map<std::pair<int, int>, int> freq_map = {};
-
-    for (const std::vector<int> &piece : pieces) 
+    for (const std::vector<int> &piece : pieces)
     {
-        for (std::size_t i = 0; i+1 < piece.size(); i++) {
+        for (std::size_t i = 0; i + 1 < piece.size(); i++)
+        {
             std::pair<int, int> pair = {piece[i], piece[i + 1]};
-            freq_map[pair] += 1;
+            counts[pair] += 1;
         }
     }
 
-    return freq_map;
+    return counts;
 }
 
-std::pair<int, int> select_pair(
-    const std::map<std::pair<int, int>, int> &counts
-)
+std::pair<int, int> select_pair(const std::map<std::pair<int, int>, int> &counts)
 {
-    // select the pair with the highest numerical frequency
-    // break ties based off smallest numerical value
-    std::pair<int, int> best_pair = counts.begin()->first; // first map entry key (pair)
-    int best_count = counts.begin()->second; // first map value (count)
+    // select the most frequent pair, breaking ties with the smallest numerical pair
+    std::pair<int, int> best_pair = counts.begin()->first;
+    int best_count = counts.begin()->second;
 
-    for (const auto &pair_entry : counts)
+    for (const std::pair<const std::pair<int, int>, int> &entry : counts)
     {
-        std::pair<int, int> pair = pair_entry.first;
-        int count = pair_entry.second;
+        std::pair<int, int> pair = entry.first;
+        int count = entry.second;
 
         if (count > best_count || (count == best_count && pair < best_pair))
         {
@@ -176,239 +144,261 @@ std::pair<int, int> select_pair(
 
 std::vector<int> bytes_to_ids(const std::string &piece)
 {
-    std::vector<int> res;
-    for (unsigned char byte : piece) // "A" -> 65
-        res.push_back(byte); // convert byte from unsigned char to int
-    return res;
+    std::vector<int> token_ids;
+
+    for (unsigned char byte : piece)
+        token_ids.push_back(byte);
+
+    return token_ids;
 }
 
-class BPETokenizer
+} // namespace
+
+BPETokenizer::BPETokenizer(int mergeable_vocab_size, const std::map<std::string, int> &special_tokens)
 {
+    if (mergeable_vocab_size < 256)
+        throw std::invalid_argument("mergeable_vocab_size must be at least 256");
 
-// callable from API
-public:
-    BPETokenizer(int mergeable_vocab_size, const std::map<std::string, int> &special_tokens = {})
+    this->mergeable_vocab_size = mergeable_vocab_size;
+    this->special_tokens = special_tokens;
+    vocab_size = mergeable_vocab_size + static_cast<int>(special_tokens.size());
+
+    std::set<int> expected_special_ids;
+    std::set<int> actual_special_ids;
+
+    for (int token_id = mergeable_vocab_size; token_id < vocab_size; token_id++)
+        expected_special_ids.insert(token_id);
+
+    for (const std::pair<const std::string, int> &special_token : special_tokens)
     {
-        if (mergeable_vocab_size < 256)
-            throw std::invalid_argument("mergeable_vocab_size must be at least 256");
+        if (special_token.first.empty())
+            throw std::invalid_argument("special tokens cannot be empty");
 
-        this->mergeable_vocab_size = mergeable_vocab_size;
-        this->special_tokens = special_tokens;
-        vocab_size = mergeable_vocab_size + special_tokens.size();
-
-        std::set<int> expected_special_ids;
-        std::set<int> actual_special_ids;
-
-        for (int token_id = mergeable_vocab_size; token_id < vocab_size; token_id++)
-            expected_special_ids.insert(token_id);
-
-        for (const std::pair<const std::string, int> &special_token : special_tokens)
-        {
-            if (special_token.first.empty())
-                throw std::invalid_argument("special tokens cannot be empty");
-
-            actual_special_ids.insert(special_token.second);
-        }
-
-        if (actual_special_ids != expected_special_ids)
-            throw std::invalid_argument("special token IDs must begin after the mergeable vocabulary");
-
-        reset_vocabulary();
+        actual_special_ids.insert(special_token.second);
     }
 
-    void train(const std::string &text)
+    if (actual_special_ids != expected_special_ids)
+        throw std::invalid_argument("special token IDs must begin after the mergeable vocabulary");
+
+    reset_vocabulary();
+}
+
+void BPETokenizer::train(const std::string &text)
+{
+    // take a training corpus and learn BPE merge rules
+    std::vector<std::string> string_pieces = pretokenize(text);
+    std::vector<std::vector<int>> integer_pieces;
+
+    for (const std::string &piece : string_pieces)
+        integer_pieces.push_back(bytes_to_ids(piece));
+
+    merges.clear();
+    reset_vocabulary();
+
+    for (int new_token_id = 256; new_token_id < mergeable_vocab_size; new_token_id++)
     {
-        // contract: take training corpus, learn BPE merge rules
+        std::map<std::pair<int, int>, int> counts = count_pairs(integer_pieces);
+        if (counts.empty()) break;
 
-        // firstly pretokenize raw text to partition into exclusive groups to process
-        std::vector<std::string> str_pieces = pretokenize(text);
+        std::pair<int, int> selected_pair = select_pair(counts);
 
-        // convert all pre-tokenized string chunks into integer chunks
-        std::vector<std::vector<int>> int_pieces;
-        for (const std::string &piece : str_pieces)
-            int_pieces.push_back(bytes_to_ids(piece));
+        for (std::vector<int> &piece : integer_pieces)
+            piece = merge_pair(piece, selected_pair, new_token_id);
 
-        merges.clear();
-        reset_vocabulary();
+        merges[selected_pair] = new_token_id;
+        vocabulary[new_token_id] = vocabulary[selected_pair.first] + vocabulary[selected_pair.second];
+    }
+}
 
-        // keep merging until populate tokens 256...mergeable_vocab_size-1 with merges
-        for (int new_token_id = 256; new_token_id < mergeable_vocab_size; new_token_id++)
-        {
-            std::map<std::pair<int, int>, int> counts = count_pairs(int_pieces);
-
-            if (counts.empty()) break;
-
-            // select highest frequency and lowest numerical value pair to merge
-            std::pair<int, int> selected_pair = select_pair(counts);
-
-            // merge the full corpus
-            for (std::vector<int> &piece : int_pieces)
-                piece = merge_pair(piece, selected_pair, new_token_id);
-
-            // add to merges and vocabulary
-            merges[selected_pair] = new_token_id;
-            vocabulary[new_token_id] = vocabulary[selected_pair.first] + vocabulary[selected_pair.second]; // vocabulary[token_id] -> represented byte sequence
-        }
-
+std::vector<int> BPETokenizer::encode(const std::string &text, const std::set<std::string> &allowed_special) const
+{
+    // special tokens bypass pre-tokenization and BPE only when explicitly allowed
+    for (const std::string &special_token : allowed_special)
+    {
+        if (!special_tokens.contains(special_token))
+            throw std::invalid_argument("unknown special token: " + special_token);
     }
 
-    const std::map<std::pair<int, int>, int> &get_merges() const
-    {
-        return merges;
-    }
+    if (allowed_special.empty()) return encode_ordinary(text);
 
-    std::vector<int> encode(const std::string &text, const std::set<std::string> &allowed_special = {}) const
+    std::vector<int> token_ids;
+    std::size_t ordinary_start = 0;
+    std::size_t position = 0;
+
+    while (position < text.size())
     {
-        // special tokens bypass pre-tokenization and BPE only when explicitly allowed
+        std::string matched_special;
+
         for (const std::string &special_token : allowed_special)
         {
-            if (!special_tokens.contains(special_token))
-                throw std::invalid_argument("unknown special token: " + special_token);
+            bool matches = text.compare(position, special_token.size(), special_token) == 0;
+
+            if (matches && special_token.size() > matched_special.size())
+                matched_special = special_token;
         }
 
-        if (allowed_special.empty()) return encode_ordinary(text);
-
-        std::vector<int> token_ids;
-        std::size_t ordinary_start = 0;
-        std::size_t position = 0;
-
-        while (position < text.size())
+        if (matched_special.empty())
         {
-            std::string matched_special;
-
-            for (const std::string &special_token : allowed_special)
-            {
-                bool matches = text.compare(position, special_token.size(), special_token) == 0;
-
-                if (matches && special_token.size() > matched_special.size())
-                    matched_special = special_token;
-            }
-
-            if (matched_special.empty())
-            {
-                position++;
-                continue;
-            }
-
-            std::vector<int> ordinary_ids = encode_ordinary(text.substr(ordinary_start, position - ordinary_start));
-            for (int token_id : ordinary_ids) token_ids.push_back(token_id);
-
-            token_ids.push_back(special_tokens.at(matched_special));
-            position += matched_special.size();
-            ordinary_start = position;
+            position++;
+            continue;
         }
 
-        std::vector<int> ordinary_ids = encode_ordinary(text.substr(ordinary_start));
+        std::vector<int> ordinary_ids = encode_ordinary(text.substr(ordinary_start, position - ordinary_start));
         for (int token_id : ordinary_ids) token_ids.push_back(token_id);
 
-        return token_ids;
+        token_ids.push_back(special_tokens.at(matched_special));
+        position += matched_special.size();
+        ordinary_start = position;
     }
 
-    std::string decode(const std::vector<int> &token_ids) const
-    {
-        // turn flat tokenized vector into raw plaintext
-        std::string text;
+    std::vector<int> ordinary_ids = encode_ordinary(text.substr(ordinary_start));
+    for (int token_id : ordinary_ids) token_ids.push_back(token_id);
 
-        for (int token_id : token_ids) text += vocabulary.at(token_id);
+    return token_ids;
+}
 
-        return text;
-    }
-
-// state-dependent helper functions
-private:
-    int mergeable_vocab_size;
-    int vocab_size;
-    std::map<std::pair<int, int>, int> merges;
-    std::map<std::string, int> special_tokens;
-    std::vector<std::string> vocabulary;
-
-    std::vector<int> encode_ordinary(const std::string &text) const
-    {
-        // turn ordinary raw text into a flat tokenized vector
-        std::vector<std::string> pieces = pretokenize(text);
-        std::vector<int> token_ids;
-
-        for (const std::string &piece : pieces)
-        {
-            std::vector<int> piece_token_ids = encode_piece(piece);
-            for (int token_id : piece_token_ids) token_ids.push_back(token_id);
-        }
-
-        return token_ids;
-    }
-
-    std::vector<int> encode_piece(const std::string &piece) const
-    {
-        // pretokenize(input text) -> pieces -> encode_piece(piece), ...
-        //   takes one pre-tokenized piece (string), converts it to token ID's using existing learned merge rules
-        std::vector<int> token_ids = bytes_to_ids(piece); // convert string to list of id's
-
-        // algorithm repeatedly scans entire sequence, checks all adjacent pairs against learned merge rules
-        // tracks the lowest token ID (rule learned earliest) till end of string, merges that, repeats
-
-        while (token_ids.size() >= 2)
-        {
-            std::pair<int, int> selected_pair;
-            int selected_token_id = -1;
-
-            // find the applicable pair whose rule was learned earliest
-            // select all pairs, and find merge rule with lowest token ID. 
-            for (std::size_t i = 0; i+1 < token_ids.size(); i++)
-            {
-                std::pair<int, int> current_pair = {token_ids[i], token_ids[i+1]};
-
-                // if this current pair is not in our merge rules, skip
-                if (!merges.contains(current_pair)) continue;
-
-                int current_token_id = merges.at(current_pair);
-
-                // smaller token ID means the rule was learned earlier
-                // if first candidate, or smaller than current candidate
-                if (selected_token_id == -1 || current_token_id < selected_token_id)
-                {
-                    selected_pair = current_pair;
-                    selected_token_id = current_token_id;
-                }
-            }
-
-            // no learned merge rule applied and we've reached end of input
-            if (selected_token_id == -1) break;
-
-            token_ids = merge_pair(token_ids, selected_pair, selected_token_id);
-        }
-        
-        return token_ids;
-    }
-
-    void reset_vocabulary()
-    {
-        // populate base bytes, reserve learned-token slots, and add special tokens
-        vocabulary.assign(vocab_size, "");
-  
-        for (int token_id = 0; token_id < 256; token_id++)
-            vocabulary[token_id] = std::string(1, static_cast<char>(token_id));
-
-        for (const std::pair<const std::string, int> &special_token : special_tokens)
-            vocabulary[special_token.second] = special_token.first;
-    }
-
-};
-
-int main() 
+std::string BPETokenizer::decode_bytes(const std::vector<int> &token_ids) const
 {
-    std::map<std::string, int> special_tokens = {{"<|endoftext|>", 260}};
-    BPETokenizer tokenizer(260, special_tokens);
-    tokenizer.train("hello hello hello");
+    std::string text;
 
-    for (const auto &entry : tokenizer.get_merges())
+    for (int token_id : token_ids)
+        text += vocabulary.at(token_id);
+
+    return text;
+}
+
+TokenizerState BPETokenizer::to_state() const
+{
+    TokenizerState state;
+    state.format = TOKENIZER_FORMAT;
+    state.language = TOKENIZER_LANGUAGE;
+    state.pre_tokenizer = PRETOKENIZER_NAME;
+    state.mergeable_vocab_size = mergeable_vocab_size;
+    state.vocab_size = vocab_size;
+    state.special_tokens = special_tokens;
+    state.regex = GPT2_PATTERN_TEXT;
+
+    for (const std::pair<const std::pair<int, int>, int> &entry : merges)
+        state.merges.push_back({entry.first.first, entry.first.second, entry.second});
+
+    std::sort(state.merges.begin(), state.merges.end(), [](const MergeRule &left, const MergeRule &right) {
+        return left.new_token < right.new_token;
+    });
+
+    return state;
+}
+
+BPETokenizer BPETokenizer::from_state(const TokenizerState &state)
+{
+    bool supported_language = state.language == "py" || state.language == "cpp" || state.language == "rust";
+
+    if (state.format != TOKENIZER_FORMAT || !supported_language)
+        throw std::invalid_argument("unsupported tokenizer artifact");
+
+    if (state.pre_tokenizer != PRETOKENIZER_NAME || state.regex != GPT2_PATTERN_TEXT)
+        throw std::invalid_argument("unsupported pre-tokenizer configuration");
+
+    BPETokenizer tokenizer(state.mergeable_vocab_size, state.special_tokens);
+
+    if (state.vocab_size != tokenizer.vocab_size)
+        throw std::invalid_argument("tokenizer vocabulary sizes do not match");
+
+    int expected_token = 256;
+
+    for (const MergeRule &rule : state.merges)
     {
-        std::pair<int, int> pair = entry.first;
-        int new_token_id = entry.second;
-        std::cout << pair.first << ", " << pair.second
-                  << " -> " << new_token_id << "\n";
+        if (rule.new_token != expected_token || rule.new_token >= tokenizer.mergeable_vocab_size)
+            throw std::invalid_argument("merge token IDs are not sequential");
+
+        if (rule.left_token < 0 || rule.right_token < 0 || rule.left_token >= rule.new_token || rule.right_token >= rule.new_token)
+            throw std::invalid_argument("merge rule references an unavailable token");
+
+        std::pair<int, int> pair = {rule.left_token, rule.right_token};
+
+        if (tokenizer.merges.contains(pair))
+            throw std::invalid_argument("duplicate merge pair");
+
+        tokenizer.merges[pair] = rule.new_token;
+        tokenizer.vocabulary[rule.new_token] = tokenizer.vocabulary[rule.left_token] + tokenizer.vocabulary[rule.right_token];
+        expected_token++;
     }
 
-    std::set<std::string> allowed_special = {"<|endoftext|>"};
-    std::vector<int> token_ids = tokenizer.encode("hello<|endoftext|>hello", allowed_special);
-    std::cout << tokenizer.decode(token_ids) << "\n";
+    return tokenizer;
+}
+
+int BPETokenizer::get_mergeable_vocab_size() const
+{
+    return mergeable_vocab_size;
+}
+
+int BPETokenizer::get_vocab_size() const
+{
+    return vocab_size;
+}
+
+const std::map<std::pair<int, int>, int> &BPETokenizer::get_merges() const
+{
+    return merges;
+}
+
+const std::map<std::string, int> &BPETokenizer::get_special_tokens() const
+{
+    return special_tokens;
+}
+
+std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
+{
+    std::vector<std::string> pieces = pretokenize(text);
+    std::vector<int> token_ids;
+
+    for (const std::string &piece : pieces)
+    {
+        std::vector<int> piece_token_ids = encode_piece(piece);
+        for (int token_id : piece_token_ids) token_ids.push_back(token_id);
+    }
+
+    return token_ids;
+}
+
+std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
+{
+    // repeatedly scan the current sequence and apply the earliest learned merge rule
+    std::vector<int> token_ids = bytes_to_ids(piece);
+
+    while (token_ids.size() >= 2)
+    {
+        std::pair<int, int> selected_pair;
+        int selected_token_id = -1;
+
+        for (std::size_t i = 0; i + 1 < token_ids.size(); i++)
+        {
+            std::pair<int, int> current_pair = {token_ids[i], token_ids[i + 1]};
+            if (!merges.contains(current_pair)) continue;
+
+            int current_token_id = merges.at(current_pair);
+
+            if (selected_token_id == -1 || current_token_id < selected_token_id)
+            {
+                selected_pair = current_pair;
+                selected_token_id = current_token_id;
+            }
+        }
+
+        if (selected_token_id == -1) break;
+
+        token_ids = merge_pair(token_ids, selected_pair, selected_token_id);
+    }
+
+    return token_ids;
+}
+
+void BPETokenizer::reset_vocabulary()
+{
+    vocabulary.assign(vocab_size, "");
+
+    for (int token_id = 0; token_id < 256; token_id++)
+        vocabulary[token_id] = std::string(1, static_cast<char>(token_id));
+
+    for (const std::pair<const std::string, int> &special_token : special_tokens)
+        vocabulary[special_token.second] = special_token.first;
 }
