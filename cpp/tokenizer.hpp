@@ -3,6 +3,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -50,9 +51,13 @@ public:
 private:
     int mergeable_vocab_size;
     int vocab_size;
-    std::map<std::pair<int, int>, int> merges;
     std::map<std::string, int> special_tokens;
+
     std::vector<std::string> vocabulary;
+    std::map<std::pair<int, int>, int> merges;
+
+    // optimization: fastpath
+    std::unordered_map<std::string, int> token_to_id;
 
     std::vector<int> encode_ordinary(const std::string &text) const;
     std::vector<int> encode_piece(const std::string &piece) const;

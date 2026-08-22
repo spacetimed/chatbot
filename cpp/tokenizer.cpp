@@ -151,6 +151,7 @@ std::pair<int, int> select_pair(const std::map<std::pair<int, int>, int> &counts
 
 std::vector<int> bytes_to_ids(const std::string &piece)
 {
+    // string -> bytes
     std::vector<int> token_ids;
     token_ids.reserve(piece.size()); // optimization basic data
 
@@ -217,6 +218,7 @@ void BPETokenizer::train(const std::string &text)
 
         merges[selected_pair] = new_token_id;
         vocabulary[new_token_id] = vocabulary[selected_pair.first] + vocabulary[selected_pair.second];
+        token_to_id.emplace(vocabulary[new_token_id], new_token_id);
     }
 }
 
@@ -229,6 +231,7 @@ std::vector<int> BPETokenizer::encode(const std::string &text, const std::set<st
             throw std::invalid_argument("unknown special token: " + special_token);
     }
 
+    // branch to ordinary encode if no speical tokens
     if (allowed_special.empty()) return encode_ordinary(text);
 
     std::vector<int> token_ids;
@@ -331,6 +334,7 @@ BPETokenizer BPETokenizer::from_state(const TokenizerState &state)
 
         tokenizer.merges[pair] = rule.new_token;
         tokenizer.vocabulary[rule.new_token] = tokenizer.vocabulary[rule.left_token] + tokenizer.vocabulary[rule.right_token];
+        tokenizer.token_to_id.emplace(tokenizer.vocabulary[rule.new_token], rule.new_token);
         expected_token++;
     }
 
@@ -359,16 +363,31 @@ const std::map<std::string, int> &BPETokenizer::get_special_tokens() const
 
 std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
 {
+    // pretokenize entire text stream (break into groups)
     std::vector<std::string> pieces = pretokenize(text);
+
+    // output (flattened token id's)
     std::vector<int> token_ids;
 
     // optimization basic data
     token_ids.reserve(text.size());
 
+    // for each piece, encode_piece and add to our resultant reserve
     for (const std::string &piece : pieces)
     {
-        std::vector<int> piece_token_ids = encode_piece(piece);
-        for (int token_id : piece_token_ids) token_ids.push_back(token_id);
+        // optimization: fast path
+        auto token = token_to_id.find(piece);
+
+        if (token != token_to_id.end())
+        {
+            token_ids.push_back(token->second);
+        }
+        else
+        {
+            // process normally
+            std::vector<int> piece_token_ids = encode_piece(piece);
+            for (int token_id : piece_token_ids) token_ids.push_back(token_id);
+        }
     }
 
     return token_ids;
@@ -376,9 +395,12 @@ std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
 
 std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
 {
-    // repeatedly scan the current sequence and apply the earliest learned merge rule
+    // we are now operating on a singular piece of plaintext (a pretokenized group)
+
+    // turn that string text into integers
     std::vector<int> token_ids = bytes_to_ids(piece);
 
+    // repeatedly scan the current sequence and apply the earliest learned merge rule
     while (token_ids.size() >= 2)
     {
         std::pair<int, int> selected_pair;
@@ -412,9 +434,14 @@ std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
 void BPETokenizer::reset_vocabulary()
 {
     vocabulary.assign(vocab_size, "");
+    token_to_id.clear();
+    token_to_id.reserve(mergeable_vocab_size);
 
     for (int token_id = 0; token_id < 256; token_id++)
+    {
         vocabulary[token_id] = std::string(1, static_cast<char>(token_id));
+        token_to_id.emplace(vocabulary[token_id], token_id);
+    }
 
     for (const std::pair<const std::string, int> &special_token : special_tokens)
         vocabulary[special_token.second] = special_token.first;

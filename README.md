@@ -40,20 +40,45 @@ This project is an extension of my work in the [Gradcore](https://github.com/spa
 - Moved dataset loading to `dataset_loader.py` so that both `train.py` and `tokenizer_driver.py` can stream HF datasets.
 - Long process of writing a naive variant of `tokenizer.cpp` (based off `tokenizer.py`). Around ~400 lines just for the same functionality, with the tedious part being Regex: C++ did not offer the same Regex capability as Python (specifically unicode property escapes required by the GPT-2 pretokenization pattern). 
 - Had some abstraction issues with `tokenizer_driver.py` so I delegated all I/O functions to that, instead of mixing I/O into the tokenizer scripts themself.
-- **Optimization 1**: C++ tokenizer now overall faster than Python tokenizer! (Plotted as: `cpp pcre2 no utf recheck`)
-    - I noticed that Python's speed for `train, encode, decode` was roughly `slow, medium, fast` (respectively)—in terms of throughput. 
-    - The naive C++ tokenizer I wrote was (for some reason) `slow, *slower*, fast` in terms of the same sequence of operations; therefore, encoding was oddly slow. This is seen in the `cpp naive` benchmark below.
-    - After profiling with `std::chrono` throughout the `encode_ordinary` function in the C++ file, I noticed a single call to pretokenization was insanely expensive. 
-     - PCRE2 was validating the same unchanged UTF-8 input during every `pcre2_match()` call. I retained validation for the first match and enabled `PCRE2_NO_UTF_CHECK` for subsequent matches.
-    - After including the disable check flag in the `match_options`, the median encoding latency went from 32.9089 seconds to 0.2025 seconds!
 
-## Tokenizer benchmarks so far
+## Optimizing the tokenizer
 
-The first two plots (`python naive`, `cpp naive`) are the naive implementations of the [Tokenizer specification](/docs/tokenizer.md). The `cpp naive` one specifically is pretty much a mirror of the Python one.
+The first two plots (`python naive`, `cpp naive`) are the naive implementations of my [Tokenizer specification](/docs/tokenizer.md). The `cpp naive` one specifically is pretty much a mirror of the Python one.
 
-Plots under these are the progressive evolution of my C++ tokenizer as I add more optimizations. Some optimizations are discussed above.
+All plots below the first two are progressive iterations of my C++ tokenizer optimizations in chronological order. Most optimizations are discussed below.
+
+**About the benchmark:** Uses FineWeb-Edu corpora to report median throughput in MB/s for:
+1. Training a 1,000-token vocabulary on 96 KB across 3 repetitions.
+2. Encoding 995 KB across 5 repetitions.
+3. Decoding 995 KB across 20 repetitions.
+
 
 ![](./images/benchmark.png)
+
+**Optimization 1** — `cpp pcre2 no utf recheck`
+
+- I noticed that Python's speed for `train, encode, decode` was roughly `slow, medium, fast` (respectively)—in terms of throughput. 
+- The naive C++ tokenizer I wrote was (for some reason) `slow, *slower*, fast` in terms of the same sequence of operations; therefore, encoding was oddly slow. This is seen in the `cpp naive` benchmark.
+- After profiling with `std::chrono` throughout the `encode_ordinary` function in the C++ file, I noticed a single call to pretokenization was insanely expensive. Something like 30 seconds for the bench.
+- **What was unoptimized?** PCRE2 was validating the same unchanged UTF-8 input during every `pcre2_match()` call. I retained validation for the first match, but enabled `PCRE2_NO_UTF_CHECK` for subsequent matches.
+- After including the disable check flag in the `match_options`, the median encoding latency went from `32.9089 s` to `0.2025 s`!
+- Milestone: C++ tokenizer now faster than the Python implementation in all three modes!
+
+**Optimization 2** — `cpp basic`
+
+- This was mainly quick code cleanup (using `.reserve` to preallocate sufficient space for several data structures, small changes to an iterator).
+- All modes actually had a meaningful boost (especially encode) for how trivial this set of optimizations was. 
+
+**Optimization 3** — `cpp fastpath`
+
+- At this point, I've realized my `encode_piece` (which is called on every pretokenized chunk) is a large bottleneck in the current code. It performs a lot of repeated work by naively re-scanning the entire sequence to apply merge rules.
+- My plan is to add a local-rank optimization for `encode_piece` next, but before that, I wanted to see if I can prevent even calling this function for certain pretoken pieces.
+- After assessing the tokenizer's training corpus, I discovered `51.66%` of the 197,355 pretokens already corresponded to a single vocabulary token. Because `encode_piece` simply wants to turn a "pretokenized piece" into a flat vector of tokens, we don't really need to apply merge rules if that pretokenized piece is a vocabulary word. We can just quickly add the token ID corresponding to that word.
+- I made a reverse map (`std::unordered_map<std::string, int> token_to_id`) which was basically an inverse of the `vocabulary` vector. It maps strings of any length (like `the`), to a token ID, if it exists in the vocabulary.
+- Now, ~50% of pretokens in our corpus bypass the (currently) expensive `encode_piece` call, and get immediately encoded into their tokenized integer representation.
+- This improved encoding-throughput from `6.08 MB/s` to `6.74 MB/s`, a `+10.96%` throughput improvement.
+
+
 
 ## Brainstorming
 
