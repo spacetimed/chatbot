@@ -38,7 +38,7 @@ This project is an extension of my work in the [Gradcore](https://github.com/spa
 - I rewrote `tokenizer_driver.py` to serve as a harness for running different language tokenizer implementations.
 - I rewrote `tokenizer.py` (from my Gradcore repo) to be a naive and readable implementation for the C++ and Rust variants to follow. 
 - Moved dataset loading to `dataset_loader.py` so that both `train.py` and `tokenizer_driver.py` can stream HF datasets.
-- Long process of writing a naive variant of `tokenizer.cpp` (based off `tokenizer.py`). Around ~400 lines just for the same functionality, with the tedious part being Regex: C++ did not offer the same Regex capability as Python (specifically unicode property escapes required by the GPT-2 pretokenization pattern). 
+- Long process of writing a naive variant of `tokenizer.cpp` (based off `tokenizer.py`). Around ~400 lines just for the same functionality, with the tedious part being Regex: C++ did not offer the same Regex capability as Python (specifically unicode property escapes required by the GPT-2 pretokenization pattern), so I had to import and use PCRE2. 
 - Had some abstraction issues with `tokenizer_driver.py` so I delegated all I/O functions to that, instead of mixing I/O into the tokenizer scripts themself.
 
 ## Optimizing the tokenizer
@@ -73,10 +73,10 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 
 - At this point, I've realized my `encode_piece` (which is called on every pretokenized chunk) is a large bottleneck in the current code. It performs a lot of repeated work by naively re-scanning the entire sequence to apply merge rules.
 - My plan is to add a local-rank optimization for `encode_piece` next, but before that, I wanted to see if I can prevent even calling this function for certain pretoken pieces.
-- After assessing the tokenizer's training corpus, I discovered `51.66%` of the 197,355 pretokens already corresponded to a single vocabulary token. Because `encode_piece` simply wants to turn a "pretokenized piece" into a flat vector of tokens, we don't really need to apply merge rules if that pretokenized piece is a vocabulary word. We can just quickly add the token ID corresponding to that word.
+- After assessing the tokenizer's training corpus, I discovered `51.66%` of the 197,355 pretokens already corresponded to a single vocabulary token. Because `encode_piece` simply wants to turn a "pretokenized piece" into a flat vector of tokens, we don't really need to apply merge rules if that pretokenized piece is a vocabulary token—it's already atomic. We can just quickly add the token ID corresponding to that word.
 - I made a reverse map (`std::unordered_map<std::string, int> token_to_id`) which was basically an inverse of the `vocabulary` vector. It maps strings of any length (like `the`), to a token ID, if it exists in the vocabulary.
 - Now, ~50% of pretokens in our corpus bypass the (currently) expensive `encode_piece` call, and get immediately encoded into their tokenized integer representation.
-- This improved encoding-throughput from `6.08 MB/s` to `6.74 MB/s`, a `+10.96%` throughput improvement.
+- This improved encoding-throughput from `6.08 MB/s` to `6.74 MB/s`, a `+10.86%` throughput improvement.
 
 
 

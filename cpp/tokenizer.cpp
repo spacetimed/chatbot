@@ -396,6 +396,20 @@ std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
 std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
 {
     // we are now operating on a singular piece of plaintext (a pretokenized group)
+    // we want to turn that plaintext into a flat vector that has our applied merge rules
+
+    /*
+        rank optimization:
+         1. convert piece to byte token ids
+         2. create ranks[] once => rank[i] = merge rank for (t[i],t[i+1]) 
+         3. not mergeable => INF
+         4. find lowest rank (scan left->right) (ties => leftmost; all INF => stop)
+         5. merge only that e.g. A B {C D} E -> A B {X} E
+            only pairs touching X changed: (B,X) and (X,E)
+            so only recompute those ranks
+         6. repeat until all ranks INF
+    */
+
 
     // turn that string text into integers
     std::vector<int> token_ids = bytes_to_ids(piece);
