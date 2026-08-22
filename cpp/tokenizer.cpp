@@ -3,6 +3,8 @@
 
 #include "tokenizer.hpp"
 
+#include <iostream>
+#include <chrono>
 #include <algorithm>
 #include <stdexcept>
 
@@ -41,14 +43,19 @@ std::vector<std::string> pretokenize(const std::string &text)
     PCRE2_SPTR subject = reinterpret_cast<PCRE2_SPTR>(text.data());
     PCRE2_SIZE offset = 0;
 
+
     while (offset < text.size())
     {
+        int32_t match_options = PCRE2_ANCHORED;
+        if (offset > 0) match_options |= PCRE2_NO_UTF_CHECK;
+        
+        // expensive
         int match_count = pcre2_match(
             pattern,
             subject,
             text.size(),
             offset,
-            PCRE2_ANCHORED,
+            match_options,
             match_data,
             nullptr
         );

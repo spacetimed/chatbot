@@ -38,6 +38,22 @@ This project is an extension of my work in the [Gradcore](https://github.com/spa
 - I rewrote `tokenizer_driver.py` to serve as a harness for running different language tokenizer implementations.
 - I rewrote `tokenizer.py` (from my Gradcore repo) to be a naive and readable implementation for the C++ and Rust variants to follow. 
 - Moved dataset loading to `dataset_loader.py` so that both `train.py` and `tokenizer_driver.py` can stream HF datasets.
+- Long process of writing a naive variant of `tokenizer.cpp` (based off `tokenizer.py`). Around ~400 lines just for the same functionality, with the tedious part being Regex: C++ did not offer the same Regex capability as Python (specifically unicode property escapes required by the GPT-2 pretokenization pattern). 
+- Had some abstraction issues with `tokenizer_driver.py` so I delegated all I/O functions to that, instead of mixing I/O into the tokenizer scripts themself.
+- **Optimization 1**: C++ tokenizer now overall faster than Python tokenizer! (Plotted as: `cpp pcre2 no utf recheck`)
+    - I noticed that Python's speed for `train, encode, decode` was roughly `slow, medium, fast` (respectively)—in terms of throughput. 
+    - The naive C++ tokenizer I wrote was (for some reason) `slow, *slower*, fast` in terms of the same sequence of operations; therefore, encoding was oddly slow. This is seen in the `cpp naive` benchmark below.
+    - After profiling with `std::chrono` throughout the `encode_ordinary` function in the C++ file, I noticed a single call to pretokenization was insanely expensive. 
+     - PCRE2 was validating the same unchanged UTF-8 input during every `pcre2_match()` call. I retained validation for the first match and enabled `PCRE2_NO_UTF_CHECK` for subsequent matches.
+    - After including the disable check flag in the `match_options`, the median encoding latency went from 32.9089 seconds to 0.2025 seconds!
+
+## Tokenizer benchmarks so far
+
+The first two plots (`python naive`, `cpp naive`) are the naive implementations of the [Tokenizer specification](/docs/tokenizer.md). The `cpp naive` one specifically is pretty much a mirror of the Python one.
+
+Plots under these are the progressive evolution of my C++ tokenizer as I add more optimizations. Some optimizations are discussed above.
+
+![](./images/benchmark.png)
 
 ## Brainstorming
 
