@@ -2,11 +2,9 @@
 #include <pcre2.h>
 
 #include "tokenizer.hpp"
-
-#include <iostream>
-#include <chrono>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdint>
 
 namespace
 {
@@ -46,7 +44,8 @@ std::vector<std::string> pretokenize(const std::string &text)
 
     while (offset < text.size())
     {
-        int32_t match_options = PCRE2_ANCHORED;
+        // optimization pcre2 no utf recheck
+        uint32_t match_options = PCRE2_ANCHORED;
         if (offset > 0) match_options |= PCRE2_NO_UTF_CHECK;
         
         // expensive
@@ -92,6 +91,7 @@ std::vector<int> merge_pair(const std::vector<int> &token_ids, std::pair<int, in
 {
     // replace every non-overlapping adjacent pair with new_token_id from left to right
     std::vector<int> result;
+    result.reserve(token_ids.size());
     std::size_t i = 0;
 
     while (i < token_ids.size())
@@ -152,6 +152,7 @@ std::pair<int, int> select_pair(const std::map<std::pair<int, int>, int> &counts
 std::vector<int> bytes_to_ids(const std::string &piece)
 {
     std::vector<int> token_ids;
+    token_ids.reserve(piece.size()); // optimization basic data
 
     for (unsigned char byte : piece)
         token_ids.push_back(byte);
@@ -196,6 +197,8 @@ void BPETokenizer::train(const std::string &text)
     std::vector<std::string> string_pieces = pretokenize(text);
     std::vector<std::vector<int>> integer_pieces;
 
+    integer_pieces.reserve(string_pieces.size());
+
     for (const std::string &piece : string_pieces)
         integer_pieces.push_back(bytes_to_ids(piece));
 
@@ -229,6 +232,7 @@ std::vector<int> BPETokenizer::encode(const std::string &text, const std::set<st
     if (allowed_special.empty()) return encode_ordinary(text);
 
     std::vector<int> token_ids;
+    token_ids.reserve(text.size());
     std::size_t ordinary_start = 0;
     std::size_t position = 0;
 
@@ -358,6 +362,9 @@ std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
     std::vector<std::string> pieces = pretokenize(text);
     std::vector<int> token_ids;
 
+    // optimization basic data
+    token_ids.reserve(text.size());
+
     for (const std::string &piece : pieces)
     {
         std::vector<int> piece_token_ids = encode_piece(piece);
@@ -380,9 +387,12 @@ std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
         for (std::size_t i = 0; i + 1 < token_ids.size(); i++)
         {
             std::pair<int, int> current_pair = {token_ids[i], token_ids[i + 1]};
-            if (!merges.contains(current_pair)) continue;
 
-            int current_token_id = merges.at(current_pair);
+            // optimization basic data
+            auto merge_rule = merges.find(current_pair);
+            if (merge_rule == merges.end()) continue;
+            int current_token_id = merge_rule->second;
+
 
             if (selected_token_id == -1 || current_token_id < selected_token_id)
             {
