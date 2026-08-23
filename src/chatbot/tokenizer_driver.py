@@ -45,9 +45,13 @@ class TokenizerIO:
 
     @staticmethod
     def load_tokens(path: Path) -> list[int]:
+        return TokenizerIO.load_token_array(path).tolist()
+
+    @staticmethod
+    def load_token_array(path: Path) -> np.ndarray:
         if path.stat().st_size % 4 != 0:
             raise ValueError("tokens.bin size must be divisible by four bytes")
-        return np.fromfile(path, dtype="<u4").tolist()
+        return np.fromfile(path, dtype="<u4")
 
     @staticmethod
     def save_decoded(path: Path, decoded: bytes) -> None:
@@ -245,7 +249,10 @@ def run_decode(
     rules_path = args.rules or artifact_path(args.language, "rules.json")
     output_path = args.output or artifact_path(args.language, "decoded.txt")
     tokenizer = Tokenizer.from_dict(TokenizerIO.load_rules(rules_path))
-    token_ids = TokenizerIO.load_tokens(args.input)
+    if args.language == "cpp":
+        token_ids = TokenizerIO.load_token_array(args.input)
+    else:
+        token_ids = TokenizerIO.load_tokens(args.input)
     encoded_tokens = args.input.read_bytes()
     repetitions = args.repeat if args.benchmark else 1
     elapsed_seconds = []

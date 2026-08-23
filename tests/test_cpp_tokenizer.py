@@ -1,3 +1,5 @@
+import numpy as np
+
 from chatbot._tokenizer_cpp import BPETokenizer as CppBPETokenizer
 
 from chatbot.tokenizer import BPETokenizer as PythonBPETokenizer
@@ -32,4 +34,5 @@ def test_cpp_matches_python_tokenizer():
 
     assert cpp_ids == python_ids
     assert cpp_tokenizer.decode_bytes(cpp_ids) == python_tokenizer.decode_bytes(python_ids)
+    assert cpp_tokenizer.decode_bytes(np.asarray(cpp_ids, dtype="<u4")) == python_tokenizer.decode_bytes(python_ids)
     assert CppBPETokenizer.from_dict(python_state).encode(text, allowed_special) == python_ids

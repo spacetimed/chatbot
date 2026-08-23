@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -39,6 +41,7 @@ public:
     void train(const std::string &text);
     std::vector<int> encode(const std::string &text, const std::set<std::string> &allowed_special = {}) const;
     std::string decode_bytes(const std::vector<int> &token_ids) const;
+    std::string decode_bytes(std::span<const std::uint32_t> token_ids) const;
 
     TokenizerState to_state() const;
     static BPETokenizer from_state(const TokenizerState &state);

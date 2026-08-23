@@ -1,9 +1,24 @@
 #include "tokenizer.hpp"
 
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 namespace py = pybind11;
+
+py::bytes decode_token_ids(const BPETokenizer &tokenizer, const py::object &token_ids)
+{
+    if (py::isinstance<py::array>(token_ids))
+    {
+        auto array = py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast>::ensure(token_ids);
+        if (!array || array.ndim() != 1)
+            throw std::invalid_argument("token IDs must be a one-dimensional array");
+
+        return py::bytes(tokenizer.decode_bytes(std::span(array.data(), array.size())));
+    }
+
+    return py::bytes(tokenizer.decode_bytes(py::cast<std::vector<int>>(token_ids)));
+}
 
 py::dict state_to_dict(const TokenizerState &state)
 {
@@ -61,11 +76,11 @@ PYBIND11_MODULE(_tokenizer_cpp, module)
         .def(py::init<int, const std::map<std::string, int> &>(), py::arg("mergeable_vocab_size"), py::arg("special_tokens") = std::map<std::string, int>{})
         .def("train", &BPETokenizer::train)
         .def("encode", &BPETokenizer::encode, py::arg("text"), py::arg("allowed_special") = std::set<std::string>{})
-        .def("decode_bytes", [](const BPETokenizer &tokenizer, const std::vector<int> &token_ids) {
-            return py::bytes(tokenizer.decode_bytes(token_ids));
+        .def("decode_bytes", [](const BPETokenizer &tokenizer, const py::object &token_ids) {
+            return decode_token_ids(tokenizer, token_ids);
         })
-        .def("decode", [](const BPETokenizer &tokenizer, const std::vector<int> &token_ids, const std::string &errors) {
-            py::bytes decoded(tokenizer.decode_bytes(token_ids));
+        .def("decode", [](const BPETokenizer &tokenizer, const py::object &token_ids, const std::string &errors) {
+            py::bytes decoded = decode_token_ids(tokenizer, token_ids);
             return decoded.attr("decode")("utf-8", errors);
         }, py::arg("token_ids"), py::arg("errors") = "replace")
         .def("to_dict", [](const BPETokenizer &tokenizer) {

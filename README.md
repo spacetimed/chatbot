@@ -100,6 +100,13 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 * My new `TrainingPiece` structure stores each unique pretoken once, along with its `frequency`. Pair counts are weighted by that frequency, preserving identical training behavior while avoiding repeated work on duplicate pieces.
 * This improved training throughput from `0.068 MB/s` to `0.13 MB/s`, a `+91.2%` throughput improvement.
 
+**Optimization 7** — `cpp decode buffer` — Improved decoding throughput by `+163.2%`
+
+* Originally, the C++ `decode_bytes` loop repeatedly appended each token's byte sequence to a growing `std::string`. I changed it to first calculate the exact decoded size, allocate the output string once, and copy every token directly into its final position with `std::memcpy`. This only improved decoding throughput from `95.75 MB/s` to `99.91 MB/s`. The much larger bottleneck was within the Python/C++ boundary.
+* `tokens.bin` was already loaded through NumPy, but `TokenizerIO.load_tokens` immediately converted the array into a Python list containing `410,468` individual Python integers. During every timed decode, pybind11 converted that entire list back into another C++ `std::vector<int>` before the C++ decoder could begin.
+* For the C++ decoder, I now preserve the token IDs as a contiguous NumPy `uint32` array. The pybind11 binding exposes its underlying buffer to C++ as a `std::span`, which is a lightweight view over the existing memory rather than another owned copy.
+* Together, these changes improved decoding throughput from `95.75 MB/s` to `252.02 MB/s`, a `+163.2%` throughput improvement.
+
 
 
 ## Brainstorming

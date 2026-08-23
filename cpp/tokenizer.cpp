@@ -4,6 +4,7 @@
 #include "tokenizer.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -168,6 +169,27 @@ std::vector<int> bytes_to_ids(const std::string &piece)
     return token_ids;
 }
 
+template <typename TokenId>
+std::string decode_token_ids(const std::vector<std::string> &vocabulary, const TokenId *token_ids, std::size_t token_count)
+{
+    std::size_t decoded_size = 0;
+
+    for (std::size_t i = 0; i < token_count; i++)
+        decoded_size += vocabulary.at(token_ids[i]).size();
+
+    std::string text(decoded_size, '\0');
+    char *output = text.data();
+
+    for (std::size_t i = 0; i < token_count; i++)
+    {
+        const std::string &token = vocabulary[token_ids[i]];
+        std::memcpy(output, token.data(), token.size());
+        output += token.size();
+    }
+
+    return text;
+}
+
 } // namespace
 
 BPETokenizer::BPETokenizer(int mergeable_vocab_size, const std::map<std::string, int> &special_tokens)
@@ -289,12 +311,12 @@ std::vector<int> BPETokenizer::encode(const std::string &text, const std::set<st
 
 std::string BPETokenizer::decode_bytes(const std::vector<int> &token_ids) const
 {
-    std::string text;
+    return decode_token_ids(vocabulary, token_ids.data(), token_ids.size());
+}
 
-    for (int token_id : token_ids)
-        text += vocabulary.at(token_id);
-
-    return text;
+std::string BPETokenizer::decode_bytes(std::span<const std::uint32_t> token_ids) const
+{
+    return decode_token_ids(vocabulary, token_ids.data(), token_ids.size());
 }
 
 TokenizerState BPETokenizer::to_state() const
