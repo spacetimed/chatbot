@@ -84,7 +84,7 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
     - For example: if we have `A B C D E F G` and, say, `D E` merges into `X`, then our new state looks like `A B C X F G`, and therefore the only difference is that `C X` and `X F` are potentially new pairs to merge.
 - To optimize around this invariant, I created a `ranks` array once at the beginning, where `ranks[i]` stores the merge priority for `(token[i], token[i+1])` (and therefore has size `token.size()-1`), with non-mergeable pairs being assigned `INF`.
 - Every iteration will linearly (`O(n)`) scan the cached ranks, and determine the lowest-rank pair to merge. After meging, the two neighboring pairs (explained above in example) will be recomputed.
-- One may notice: the worst case is still `O(n^2)` here, but this process saved many expensive `std::map::find()` operations (an `O(n)` operation, as opposed to `std::unordered_map`), and therefore proved to provide performance gains.
+- One may notice: the worst case is still `O(n^2)` here, but this process saved many expensive `std::map::find()` operations (an `O(logn)` operation, as opposed to `std::unordered_map`), and therefore proved to provide performance gains.
 - Also, because the median pretoken size is only `4` bytes, and `~99%` of pretokens are `<=16 bytes`, the difference for such a small input size between, say, `O(n*logn)` and our current `O(n^2)` is not insane.
 * This improved encoding throughput from `6.74 MB/s` to `9.74 MB/s`, a `+44.51%` throughput improvement.
 
@@ -94,6 +94,11 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 * I replaced these repeated allocations with reusable scratch buffers whose capacity is retained between calls, and also reused the same temporary storage across pieces.
 * This improved encoding throughput from `9.74 MB/s` to `10.16 MB/s`, a `+4.31%` throughput improvement.
 
+**Optimization 6** — `cpp dedupe` — Improved training throughput by `+91.2%`
+
+* During tokenizer training, identical pretokens were being stored and processed independently even though they always undergo the same sequence of BPE merges.
+* My new `TrainingPiece` structure stores each unique pretoken once, along with its `frequency`. Pair counts are weighted by that frequency, preserving identical training behavior while avoiding repeated work on duplicate pieces.
+* This improved training throughput from `0.068 MB/s` to `0.13 MB/s`, a `+91.2%` throughput improvement.
 
 
 

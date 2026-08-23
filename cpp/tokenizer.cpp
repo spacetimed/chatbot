@@ -112,17 +112,23 @@ std::vector<int> merge_pair(const std::vector<int> &token_ids, std::pair<int, in
     return result;
 }
 
-std::map<std::pair<int, int>, int> count_pairs(const std::vector<std::vector<int>> &pieces)
+struct TrainingPiece
+{
+    std::vector<int> token_ids;
+    int frequency;
+};
+
+std::map<std::pair<int, int>, int> count_pairs(const std::vector<TrainingPiece> &pieces)
 {
     // count adjacent pairs across multiple pre-tokenized partitions
     std::map<std::pair<int, int>, int> counts;
 
-    for (const std::vector<int> &piece : pieces)
+    for (const TrainingPiece &piece : pieces)
     {
-        for (std::size_t i = 0; i + 1 < piece.size(); i++)
+        for (std::size_t i = 0; i + 1 < piece.token_ids.size(); i++)
         {
-            std::pair<int, int> pair = {piece[i], piece[i + 1]};
-            counts[pair] += 1;
+            std::pair<int, int> pair = {piece.token_ids[i], piece.token_ids[i + 1]};
+            counts[pair] += piece.frequency;
         }
     }
 
@@ -197,12 +203,21 @@ void BPETokenizer::train(const std::string &text)
 {
     // take a training corpus and learn BPE merge rules
     std::vector<std::string> string_pieces = pretokenize(text);
-    std::vector<std::vector<int>> integer_pieces;
+    std::vector<TrainingPiece> integer_pieces;
+    std::unordered_map<std::string, std::size_t> piece_indices;
 
     integer_pieces.reserve(string_pieces.size());
+    piece_indices.reserve(string_pieces.size());
 
     for (const std::string &piece : string_pieces)
-        integer_pieces.push_back(bytes_to_ids(piece));
+    {
+        auto [piece_match, inserted] = piece_indices.try_emplace(piece, integer_pieces.size());
+
+        if (inserted)
+            integer_pieces.push_back({bytes_to_ids(piece), 1});
+        else
+            integer_pieces[piece_match->second].frequency += 1;
+    }
 
     merges.clear();
     reset_vocabulary();
@@ -214,8 +229,8 @@ void BPETokenizer::train(const std::string &text)
 
         std::pair<int, int> selected_pair = select_pair(counts);
 
-        for (std::vector<int> &piece : integer_pieces)
-            piece = merge_pair(piece, selected_pair, new_token_id);
+        for (TrainingPiece &piece : integer_pieces)
+            piece.token_ids = merge_pair(piece.token_ids, selected_pair, new_token_id);
 
         merges[selected_pair] = new_token_id;
         vocabulary[new_token_id] = vocabulary[selected_pair.first] + vocabulary[selected_pair.second];
