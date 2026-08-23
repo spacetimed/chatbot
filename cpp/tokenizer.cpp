@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstdint>
+#include <limits>
 
 namespace
 {
@@ -396,10 +397,10 @@ std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
 std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
 {
     // we are now operating on a singular piece of plaintext (a pretokenized group)
-    // we want to turn that plaintext into a flat vector that has our applied merge rules
+    // we want: pretokenized plaintext -> flat vector with applied merge rules
 
     /*
-        rank optimization:
+        optimization rank-scan
          1. convert piece to byte token ids
          2. create ranks[] once => rank[i] = merge rank for (t[i],t[i+1]) 
          3. not mergeable => INF
@@ -410,36 +411,69 @@ std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
          6. repeat until all ranks INF
     */
 
-
     // turn that string text into integers
     std::vector<int> token_ids = bytes_to_ids(piece);
 
-    // repeatedly scan the current sequence and apply the earliest learned merge rule
-    while (token_ids.size() >= 2)
+    // create ranks[] s.t. rank[i] = merge rank for (t[i],t[i+1])
+    std::vector<int> ranks;
+    const int INF = std::numeric_limits<int>::max();
+
+    if (token_ids.size() >= 2)
+        ranks.reserve(token_ids.size() - 1);
+
+    for (std::size_t i = 0; i + 1 < token_ids.size(); i++)
     {
-        std::pair<int, int> selected_pair;
-        int selected_token_id = -1;
+        std::pair<int, int> pair = {token_ids[i], token_ids[i + 1]};
+        auto merge_match = merges.find(pair);
 
-        for (std::size_t i = 0; i + 1 < token_ids.size(); i++)
+        if (merge_match == merges.end())
+            ranks.push_back(INF); // no merge found
+        else
+            ranks.push_back(merge_match->second);
+    }
+
+    // repeatedly find lowest rank, merge, repair affected ranks
+    while (!ranks.empty())
+    {
+        // find minimum rank
+        std::size_t lowest_rank_idx = 0;
+
+        for (std::size_t i = 1; i < ranks.size(); i++)
         {
-            std::pair<int, int> current_pair = {token_ids[i], token_ids[i + 1]};
-
-            // optimization basic data
-            auto merge_rule = merges.find(current_pair);
-            if (merge_rule == merges.end()) continue;
-            int current_token_id = merge_rule->second;
-
-
-            if (selected_token_id == -1 || current_token_id < selected_token_id)
-            {
-                selected_pair = current_pair;
-                selected_token_id = current_token_id;
-            }
+            if (ranks[i] < ranks[lowest_rank_idx])
+                lowest_rank_idx = i;
         }
 
-        if (selected_token_id == -1) break;
+        if (ranks[lowest_rank_idx] == INF)
+            break;
 
-        token_ids = merge_pair(token_ids, selected_pair, selected_token_id);
+        // now merge; we have found our best (lowest rank) to merge
+        token_ids[lowest_rank_idx] = ranks[lowest_rank_idx];
+        token_ids.erase(token_ids.begin() + lowest_rank_idx + 1); // for ..i, i+1.. => remove i+1, overwrite i
+        ranks.erase(ranks.begin() + lowest_rank_idx);
+
+        // repair only affected neighbors
+        if (lowest_rank_idx > 0)
+        {
+            std::pair<int, int> left_pair = {token_ids[lowest_rank_idx - 1], token_ids[lowest_rank_idx]};
+            auto left_merge = merges.find(left_pair);
+
+            if (left_merge == merges.end())
+                ranks[lowest_rank_idx - 1] = INF;
+            else
+                ranks[lowest_rank_idx - 1] = left_merge->second;
+        }
+
+        if (lowest_rank_idx < ranks.size())
+        {
+            std::pair<int, int> right_pair = {token_ids[lowest_rank_idx], token_ids[lowest_rank_idx + 1]};
+            auto right_merge = merges.find(right_pair);
+
+            if (right_merge == merges.end())
+                ranks[lowest_rank_idx] = INF;
+            else
+                ranks[lowest_rank_idx] = right_merge->second;
+        }
     }
 
     return token_ids;

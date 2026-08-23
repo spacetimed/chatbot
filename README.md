@@ -55,7 +55,7 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 
 ![](./images/benchmark.png)
 
-**Optimization 1** — `cpp pcre2 no utf recheck`
+**Optimization 1** — `cpp pcre2 no utf recheck` — Increased encoding throughput by roughly 164x (0.030 → 4.91 MB/s); more of an initial oversight.
 
 - I noticed that Python's speed for `train, encode, decode` was roughly `slow, medium, fast` (respectively)—in terms of throughput. 
 - The naive C++ tokenizer I wrote was (for some reason) `slow, *slower*, fast` in terms of the same sequence of operations; therefore, encoding was oddly slow. This is seen in the `cpp naive` benchmark.
@@ -64,19 +64,29 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 - After including the disable check flag in the `match_options`, the median encoding latency went from `32.9089 s` to `0.2025 s`!
 - Milestone: C++ tokenizer now faster than the Python implementation in all three modes!
 
-**Optimization 2** — `cpp basic`
+**Optimization 2** — `cpp basic` — Improved training by `19.3%` and encoding by `23%`
 
 - This was mainly quick code cleanup (using `.reserve` to preallocate sufficient space for several data structures, small changes to an iterator).
 - All modes actually had a meaningful boost (especially encode) for how trivial this set of optimizations was. 
 
-**Optimization 3** — `cpp fastpath`
+**Optimization 3** — `cpp fastpath` — Improved encoding throughput by `10.86%`
 
 - At this point, I've realized my `encode_piece` (which is called on every pretokenized chunk) is a large bottleneck in the current code. It performs a lot of repeated work by naively re-scanning the entire sequence to apply merge rules.
 - My plan is to add a local-rank optimization for `encode_piece` next, but before that, I wanted to see if I can prevent even calling this function for certain pretoken pieces.
 - After assessing the tokenizer's training corpus, I discovered `51.66%` of the 197,355 pretokens already corresponded to a single vocabulary token. Because `encode_piece` simply wants to turn a "pretokenized piece" into a flat vector of tokens, we don't really need to apply merge rules if that pretokenized piece is a vocabulary token—it's already atomic. We can just quickly add the token ID corresponding to that word.
 - I made a reverse map (`std::unordered_map<std::string, int> token_to_id`) which was basically an inverse of the `vocabulary` vector. It maps strings of any length (like `the`), to a token ID, if it exists in the vocabulary.
 - Now, ~50% of pretokens in our corpus bypass the (currently) expensive `encode_piece` call, and get immediately encoded into their tokenized integer representation.
-- This improved encoding-throughput from `6.08 MB/s` to `6.74 MB/s`, a `+10.86%` throughput improvement.
+- This improved encoding throughput from `6.08 MB/s` to `6.74 MB/s`, a `+10.86%` throughput improvement.
+
+**Optimization 4** — `cpp rank scan` – Improved encoding throughput by `+44.5%`
+- The `encode_piece` implementation seemed to be pretty expensive throughout testing due to repeating a lot of unnecessary work. After every merge, it rescanned every adjacent token pair and performed another `merge.find()`, even though most of the pairs had not changed.
+- I realized an invariant: after merging a pair, the only thing that changes in the algorithm's working state are the two pairs which neighbor the now-merged pair.
+    - For example: if we have `A B C D E F G` and, say, `D E` merges into `X`, then our new state looks like `A B C X F G`, and therefore the only difference is that `C X` and `X F` are potentially new pairs to merge.
+- To optimize around this invariant, I created a `ranks` array once at the beginning, where `ranks[i]` stores the merge priority for `(token[i], token[i+1])` (and therefore has size `token.size()-1`), with non-mergeable pairs being assigned `INF`.
+- Every iteration will linearly (`O(n)`) scan the cached ranks, and determine the lowest-rank pair to merge. After meging, the two neighboring pairs (explained above in example) will be recomputed.
+- One may notice: the worst case is still `O(n^2)` here, but this process saved many expensive `std::map::find()` operations (an `O(n)` operation, as opposed to `std::unordered_map`), and therefore proved to provide performance gains.
+- Also, because the median pretoken size is only `4` bytes, and `~99%` of pretokens are `<=16 bytes`, the difference for such a small input size between, say, `O(n*logn)` and our current `O(n^2)` is not insane.
+* This improved encoding throughput from `6.74 MB/s` to `9.74 MB/s`, a `+44.51%` throughput improvement.
 
 
 
