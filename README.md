@@ -55,7 +55,7 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 
 ![](./images/benchmark.png)
 
-**Optimization 1** — `cpp pcre2 no utf recheck` — Increased encoding throughput by roughly 164x (0.030 → 4.91 MB/s); more of an initial oversight.
+**Optimization 1** — `cpp pcre2 no utf recheck` — Improved encoding throughput by roughly 164x (0.030 → 4.91 MB/s); more of an initial oversight.
 
 - I noticed that Python's speed for `train, encode, decode` was roughly `slow, medium, fast` (respectively)—in terms of throughput. 
 - The naive C++ tokenizer I wrote was (for some reason) `slow, *slower*, fast` in terms of the same sequence of operations; therefore, encoding was oddly slow. This is seen in the `cpp naive` benchmark.
@@ -64,12 +64,12 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 - After including the disable check flag in the `match_options`, the median encoding latency went from `32.9089 s` to `0.2025 s`!
 - Milestone: C++ tokenizer now faster than the Python implementation in all three modes!
 
-**Optimization 2** — `cpp basic` — Improved training by `19.3%` and encoding by `23%`
+**Optimization 2** — `cpp basic` — Improved training throughput by `+19.3%` and encoding throughput by `+23%`
 
 - This was mainly quick code cleanup (using `.reserve` to preallocate sufficient space for several data structures, small changes to an iterator).
 - All modes actually had a meaningful boost (especially encode) for how trivial this set of optimizations was. 
 
-**Optimization 3** — `cpp fastpath` — Improved encoding throughput by `10.86%`
+**Optimization 3** — `cpp fastpath` — Improved encoding throughput by `+10.86%`
 
 - At this point, I've realized my `encode_piece` (which is called on every pretokenized chunk) is a large bottleneck in the current code. It performs a lot of repeated work by naively re-scanning the entire sequence to apply merge rules.
 - My plan is to add a local-rank optimization for `encode_piece` next, but before that, I wanted to see if I can prevent even calling this function for certain pretoken pieces.
@@ -87,6 +87,13 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 - One may notice: the worst case is still `O(n^2)` here, but this process saved many expensive `std::map::find()` operations (an `O(n)` operation, as opposed to `std::unordered_map`), and therefore proved to provide performance gains.
 - Also, because the median pretoken size is only `4` bytes, and `~99%` of pretokens are `<=16 bytes`, the difference for such a small input size between, say, `O(n*logn)` and our current `O(n^2)` is not insane.
 * This improved encoding throughput from `6.74 MB/s` to `9.74 MB/s`, a `+44.51%` throughput improvement.
+
+**Optimization 5** — `cpp scratch` — Improved encoding throughput by `+4.3%`
+
+* Profiling again showed that the remaining `encode_piece` path was repeatedly creating small temporary `token_ids` and `ranks` vectors for every single pretoken that required BPE (i.e. which did not hit the fast path optimization).
+* I replaced these repeated allocations with reusable scratch buffers whose capacity is retained between calls, and also reused the same temporary storage across pieces.
+* This improved encoding throughput from `9.74 MB/s` to `10.16 MB/s`, a `+4.31%` throughput improvement.
+
 
 
 

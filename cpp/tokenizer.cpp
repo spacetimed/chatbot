@@ -3,9 +3,9 @@
 
 #include "tokenizer.hpp"
 #include <algorithm>
-#include <stdexcept>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 namespace
 {
@@ -364,6 +364,13 @@ const std::map<std::string, int> &BPETokenizer::get_special_tokens() const
 
 std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
 {
+    // takes entire text stream (plaintext) and converts to flat encoded token vector
+
+    // optimization: scratch
+    EncodeScratch scratch;
+    scratch.token_ids.reserve(32);
+    scratch.ranks.reserve(31);
+
     // pretokenize entire text stream (break into groups)
     std::vector<std::string> pieces = pretokenize(text);
 
@@ -378,29 +385,31 @@ std::vector<int> BPETokenizer::encode_ordinary(const std::string &text) const
     {
         // optimization: fast path
         auto token = token_to_id.find(piece);
-
         if (token != token_to_id.end())
         {
             token_ids.push_back(token->second);
         }
         else
         {
+            encode_piece(piece, token_ids, scratch);
+
             // process normally
-            std::vector<int> piece_token_ids = encode_piece(piece);
-            for (int token_id : piece_token_ids) token_ids.push_back(token_id);
+            //std::vector<int> piece_token_ids = encode_piece(piece);
+            //for (int token_id : piece_token_ids) token_ids.push_back(token_id);
         }
     }
 
     return token_ids;
 }
 
-std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
+// no longer return temporary vector, now we append to output
+void BPETokenizer::encode_piece(const std::string &piece, std::vector<int> &output, EncodeScratch &scratch) const
 {
     // we are now operating on a singular piece of plaintext (a pretokenized group)
     // we want: pretokenized plaintext -> flat vector with applied merge rules
 
     /*
-        optimization rank-scan
+        optimization rank scan
          1. convert piece to byte token ids
          2. create ranks[] once => rank[i] = merge rank for (t[i],t[i+1]) 
          3. not mergeable => INF
@@ -412,10 +421,15 @@ std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
     */
 
     // turn that string text into integers
-    std::vector<int> token_ids = bytes_to_ids(piece);
+    std::vector<int> &token_ids = scratch.token_ids;
+    token_ids.clear();
+
+    for (unsigned char byte : piece)
+        token_ids.push_back(byte);
 
     // create ranks[] s.t. rank[i] = merge rank for (t[i],t[i+1])
-    std::vector<int> ranks;
+    std::vector<int> &ranks = scratch.ranks;
+    ranks.clear();
     const int INF = std::numeric_limits<int>::max();
 
     if (token_ids.size() >= 2)
@@ -476,7 +490,7 @@ std::vector<int> BPETokenizer::encode_piece(const std::string &piece) const
         }
     }
 
-    return token_ids;
+    output.insert(output.end(), token_ids.begin(), token_ids.end());
 }
 
 void BPETokenizer::reset_vocabulary()

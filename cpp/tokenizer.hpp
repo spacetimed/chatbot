@@ -53,6 +53,13 @@ private:
     int vocab_size;
     std::map<std::string, int> special_tokens;
 
+    // optimization: scratch
+    struct EncodeScratch
+    {
+        std::vector<int> token_ids;
+        std::vector<int> ranks;
+    };
+
     std::vector<std::string> vocabulary;
     std::map<std::pair<int, int>, int> merges;
 
@@ -60,6 +67,6 @@ private:
     std::unordered_map<std::string, int> token_to_id;
 
     std::vector<int> encode_ordinary(const std::string &text) const;
-    std::vector<int> encode_piece(const std::string &piece) const;
+    void encode_piece(const std::string &piece, std::vector<int> &output, EncodeScratch &scratch) const;
     void reset_vocabulary();
 };
