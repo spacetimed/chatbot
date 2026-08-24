@@ -290,6 +290,8 @@ class GPT(nn.Module):
         was_training = self.training
         self.eval()
 
+        # todo special token for stopping then break loop here
+
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -self.block_size :]
 

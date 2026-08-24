@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--tokens", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--temperature", type=float, required=False)
+    parser.add_argument("--temperature", type=float, required=False, default=1.0)
 
     return parser.parse_args()
     # soon: temperature, top-k
@@ -71,7 +71,7 @@ def main():
 
     # get device, seed
     device = get_device()
-    torch.manual_seed(1337)
+    torch.manual_seed(args.seed)
 
     # load checkpoint, ensure exists
     model, tokenizer = load_checkpoint(args.checkpoint, device)

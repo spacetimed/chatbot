@@ -24,7 +24,7 @@ This project is an extension of my work in the [Gradcore](https://github.com/spa
         - Decaying learning rate
         - AdamW configuration (similar to Karpathy's nanogpt)
 
-**Phase 2: Tokenizer challenge, implemented in Python, C++, and Rust** — *In-progress*
+**Phase 2: Tokenizer challenge, implemented in Python, C++, and Rust** — *Complete for now, Rust deferred*
 
 - Preliminary: [Tokenizer specification that I wrote](docs/tokenizer.md)
     - The tokenizer will be created three times in each language: Python, C++, and Rust. 
@@ -40,6 +40,63 @@ This project is an extension of my work in the [Gradcore](https://github.com/spa
 - Moved dataset loading to `dataset_loader.py` so that both `train.py` and `tokenizer_driver.py` can stream HF datasets.
 - Long process of writing a naive variant of `tokenizer.cpp` (based off `tokenizer.py`). Around ~400 lines just for the same functionality, with the tedious part being Regex: C++ did not offer the same Regex capability as Python (specifically unicode property escapes required by the GPT-2 pretokenization pattern), so I had to import and use PCRE2. 
 - Had some abstraction issues with `tokenizer_driver.py` so I delegated all I/O functions to that, instead of mixing I/O into the tokenizer scripts themself.
+- I've finished most of my optimizations for the C++ tokenizer. I've achieved `+1,476%` faster training, `856%` faster encoding, and `629%` faster decoding than the Python variant! 🚀 (See *Optimizing the tokenizer*)
+
+**Phase 3: Improving the model more** — *In-progress*
+- This phase will be improving the model, and getting it in a state where it can be cleanly and modularly benchmarked. 
+- I've started this phase by scrapping the previous `generate.py` and rewriting it, allowing me to use simple CLI arguments, such as:
+```sh
+python -m chatbot.generate 
+    --checkpoint checkpoints/best.pt 
+    --prompt "I want to" 
+    --tokens 200 
+    --seed 1337 
+    --temperature 0.7
+```
+- My next goal is to design a schema for benchmarking both my model training and inference. I am incorporating **MLflow** into the stack to have a clean and modular way to archive experiments. See *Model benchmarking*.
+
+## Model benchmarking
+
+**Training benchmark**
+
+Training experiments will be tracked as MLflow runs and identified by run ID/name, git commit, `GPTConfig`, `TrainConfig`, environment, tokenizer, dataset, and other relevant identification info.
+
+Two groups of measurements will be recorded:
+
+1. Running measurements 
+
+```text
+step
+
+train_loss              recent training-interval average
+
+eval_train_loss*        evaluated on training data at eval steps
+val_loss*               evaluated on validation data at eval steps
+
+learning_rate
+gradient_norm
+time_per_step_ms
+tokens_per_second
+total_tokens_seen
+```
+
+2. Aggregate measurements — summary of the completed run:
+
+```text
+final_train_loss
+final_eval_train_loss
+final_val_loss
+
+best_val_loss
+best_val_step
+
+total_tokens_seen
+total_training_time_ms
+median_time_per_step_ms
+median_tokens_per_second
+peak_accelerator_memory
+```
+
 
 ## Optimizing the tokenizer
 
