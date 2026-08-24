@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--tokens", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--temperature", type=float, required=False)
 
     return parser.parse_args()
     # soon: temperature, top-k
@@ -85,10 +86,7 @@ def main():
         device=device,
     )
 
-    generated = model.generate(
-        context,
-        max_new_tokens=args.tokens,
-    )
+    generated = model.generate(context, max_new_tokens=args.tokens, temperature=args.temperature)
 
     output_tokens = generated[0].tolist()
     output_text = tokenizer.decode(output_tokens)
