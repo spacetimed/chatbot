@@ -48,3 +48,8 @@ class TrainConfig:
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
+
+    # MLflow integration
+    mlflow_tracking_uri: str = "http://localhost:5001"
+    mlflow_experiment_name: str = "chatbot-training"
+    mlflow_run_name: str | None = None

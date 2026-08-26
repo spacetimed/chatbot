@@ -1,8 +1,10 @@
 import math
 from dataclasses import asdict
 from pathlib import Path
+from statistics import median
 from time import perf_counter
 
+import mlflow
 import torch
 
 from chatbot.config import GPTConfig, TrainConfig
@@ -194,23 +196,64 @@ def evaluate_loss(
     return total_loss / eval_batches
 
 
-def evaluate_and_report(
+def run_evaluation(
     model: GPT,
+    optimizer: torch.optim.Optimizer,
+    tokenizer: BPETokenizer,
     train_loader: TokenBatchLoader,
     val_loader: TokenBatchLoader,
     device: torch.device,
-    eval_batches: int,
+    train_config: TrainConfig,
     step: int,
-) -> dict[str, float]:
-    # prints training information at current step; returns dict (for checkpoint storage)
+    best_val_loss: float,
+    best_val_step: int,
+) -> tuple[dict[str, float], float, int]:
+
+    # compute and log training/validation loss at current step
     losses = {
-        "train": evaluate_loss(model, train_loader, device, eval_batches),
-        "val": evaluate_loss(model, val_loader, device, eval_batches),
+        "train": evaluate_loss(model, train_loader, device, train_config.eval_batches),
+        "val": evaluate_loss(model, val_loader, device, train_config.eval_batches),
     }
-
     print(f"eval  | step {step:4d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
+    mlflow.log_metrics(
+        {
+            "eval_train_loss": losses["train"],
+            "val_loss": losses["val"],
+        },
+        step=step,
+    )
 
-    return losses
+    # capture validation loss (for checkpoint saving)
+    is_best = losses["val"] < best_val_loss
+    if is_best:
+        best_val_loss = losses["val"]
+        best_val_step = step
+
+    if train_config.checkpoint_save_latest:
+        save_checkpoint(
+            train_config.checkpoint_dir / "latest.pt",
+            model,
+            optimizer,
+            tokenizer,
+            train_config,
+            step,
+            losses,
+            best_val_loss,
+        )
+
+    if train_config.checkpoint_save_best and is_best:
+        save_checkpoint(
+            train_config.checkpoint_dir / "best.pt",
+            model,
+            optimizer,
+            tokenizer,
+            train_config,
+            step,
+            losses,
+            best_val_loss,
+        )
+
+    return losses, best_val_loss, best_val_step
 
 
 def save_checkpoint(
@@ -243,47 +286,6 @@ def save_checkpoint(
     }
 
     torch.save(checkpoint, path)
-
-
-def save_evaluation_checkpoints(
-    model: GPT,
-    optimizer: torch.optim.Optimizer,
-    tokenizer: BPETokenizer,
-    train_config: TrainConfig,
-    step: int,
-    losses: dict[str, float],
-    best_val_loss: float,
-) -> float:
-    is_best = losses["val"] < best_val_loss
-
-    if is_best:
-        best_val_loss = losses["val"]
-
-    if train_config.checkpoint_save_latest:
-        save_checkpoint(
-            train_config.checkpoint_dir / "latest.pt",
-            model,
-            optimizer,
-            tokenizer,
-            train_config,
-            step,
-            losses,
-            best_val_loss,
-        )
-
-    if train_config.checkpoint_save_best and is_best:
-        save_checkpoint(
-            train_config.checkpoint_dir / "best.pt",
-            model,
-            optimizer,
-            tokenizer,
-            train_config,
-            step,
-            losses,
-            best_val_loss,
-        )
-
-    return best_val_loss
 
 
 def create_optimizer(
@@ -327,6 +329,17 @@ def create_optimizer(
     )
 
     return optimizer
+
+
+def get_mlflow_params(train_config, model_config, device, parameter_count, train_tokens, val_tokens):
+    return {
+        **asdict(train_config),
+        **asdict(model_config),
+        "device": str(device),
+        "parameter_count": parameter_count,
+        "train_tokens": len(train_tokens),
+        "validation_tokens": len(val_tokens),
+    }
 
 
 def main() -> None:
@@ -383,112 +396,152 @@ def main() -> None:
     print(f"vocab size: {tokenizer.vocab_size}")
     print(f"parameters: {parameter_count:,}")
 
-    best_val_loss = float("inf")
-
-    # measure step zero
-    losses = evaluate_and_report(
-        model,
-        train_eval_loader,
-        val_loader,
-        device,
-        train_config.eval_batches,
-        step=0,
-    )
-    best_val_loss = save_evaluation_checkpoints(
-        model,
-        optimizer,
-        tokenizer,
-        train_config,
-        step=0,
-        losses=losses,
-        best_val_loss=best_val_loss,
-    )
-
-    if train_config.log_interval <= 0:
-        raise ValueError("log_interval must be positive")
-
-    interval_loss = 0.0
-    interval_seconds = 0.0
-    interval_tokens = 0
-    interval_steps = 0
-    interval_grad_norm = 0.0
-
-    # training loop
-    model.train()
-    for step in range(1, train_config.max_steps + 1):
-        # synchronize before starting so previous accelerator work is not included
-        synchronize_device(device)
-        step_start = perf_counter()
-
-        x, y = train_loader.next_batch()
-        x = x.to(device)
-        y = y.to(device)
-        optimizer.zero_grad(set_to_none=True)
-
-        _, loss = model(x, y)
-
-        loss.backward()
-        # gradient clipping
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            model.parameters(),
-            train_config.max_grad_norm,
+    # integrate training measurements with mlflow for benchmarking
+    mlflow.set_tracking_uri(train_config.mlflow_tracking_uri)
+    mlflow.set_experiment(train_config.mlflow_experiment_name)
+    with mlflow.start_run(run_name=train_config.mlflow_run_name):
+        mlflow.log_params(
+            get_mlflow_params(train_config, model_config, device, parameter_count, train_tokens, val_tokens)
         )
 
-        step_learning_rate = get_learning_rate(step, train_config)
-        for parameter_group in optimizer.param_groups:
-            parameter_group["lr"] = step_learning_rate
+        # measure step zero
+        final_losses, best_val_loss, best_val_step = run_evaluation(
+            model,
+            optimizer,
+            tokenizer,
+            train_eval_loader,
+            val_loader,
+            device,
+            train_config,
+            step=0,
+            best_val_loss=float("inf"),
+            best_val_step=0,
+        )
 
-        optimizer.step()
+        if train_config.log_interval <= 0:
+            raise ValueError("log_interval must be positive")
 
-        # synchronize again so the full training step finishes before stopping the timer
+        # measurement buffers
+        interval_loss = 0.0
+        interval_seconds = 0.0
+        interval_tokens = 0
+        interval_steps = 0
+        interval_grad_norm = 0.0
+        step_seconds_samples = []
+
+        if device.type != "cpu":
+            torch.accelerator.reset_peak_memory_stats()
+
+        # training loop
+        training_start = perf_counter()
+        model.train()
+        for step in range(1, train_config.max_steps + 1):
+            # synchronize before starting so previous accelerator work is not included
+            synchronize_device(device)
+            step_start = perf_counter()
+
+            x, y = train_loader.next_batch()
+            x = x.to(device)
+            y = y.to(device)
+            optimizer.zero_grad(set_to_none=True)
+
+            _, loss = model(x, y)
+
+            loss.backward()
+
+            # gradient clipping
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                train_config.max_grad_norm,
+            )
+
+            step_learning_rate = get_learning_rate(step, train_config)
+            for parameter_group in optimizer.param_groups:
+                parameter_group["lr"] = step_learning_rate
+
+            optimizer.step()
+
+            # synchronize again so the full training step finishes before stopping the timer
+            synchronize_device(device)
+            step_seconds = perf_counter() - step_start
+            step_seconds_samples.append(step_seconds)
+
+            # aggregate measurements
+            interval_loss += loss.item()
+            interval_seconds += step_seconds
+            interval_tokens += train_loader.tokens_per_batch
+            interval_steps += 1
+            interval_grad_norm += grad_norm.item()
+
+            if step % train_config.log_interval == 0 or step == train_config.max_steps:
+                # log interval measurements
+                average_loss = interval_loss / interval_steps
+                average_grad_norm = interval_grad_norm / interval_steps
+                average_step_ms = (interval_seconds / interval_steps) * 1_000
+                tokens_per_second = interval_tokens / interval_seconds
+
+                print(
+                    f"train | step {step:4d} | "
+                    f"loss {average_loss:.4f} | "
+                    f"lr {step_learning_rate:.2e} | "
+                    f"grad norm {average_grad_norm:.4f} | "
+                    f"{average_step_ms:.2f} ms/step | "
+                    f"{tokens_per_second:,.0f} tok/s"
+                )
+
+                mlflow.log_metrics(
+                    {
+                        "train_loss": average_loss,
+                        "learning_rate": step_learning_rate,
+                        "gradient_norm": average_grad_norm,
+                        "time_per_step_ms": average_step_ms,
+                        "tokens_per_second": tokens_per_second,
+                        "total_tokens_seen": step * train_loader.tokens_per_batch,
+                    },
+                    step=step,
+                )
+
+                interval_loss = 0.0
+                interval_grad_norm = 0.0
+                interval_seconds = 0.0
+                interval_tokens = 0
+                interval_steps = 0
+
+            if step % train_config.eval_interval == 0 or step == train_config.max_steps:
+                # eval interval
+                final_losses, best_val_loss, best_val_step = run_evaluation(
+                    model,
+                    optimizer,
+                    tokenizer,
+                    train_eval_loader,
+                    val_loader,
+                    device,
+                    train_config,
+                    step=step,
+                    best_val_loss=best_val_loss,
+                    best_val_step=best_val_step,
+                )
+
         synchronize_device(device)
-        step_seconds = perf_counter() - step_start
+        total_training_time_ms = (perf_counter() - training_start) * 1_000
+        peak_accelerator_memory = 0 if device.type == "cpu" else torch.accelerator.max_memory_allocated()
 
-        interval_loss += loss.item()
-        interval_seconds += step_seconds
-        interval_tokens += train_loader.tokens_per_batch
-        interval_steps += 1
-        interval_grad_norm += grad_norm.item()
-
-        if step % train_config.log_interval == 0 or step == train_config.max_steps:
-            average_loss = interval_loss / interval_steps
-            average_grad_norm = interval_grad_norm / interval_steps
-            average_step_ms = (interval_seconds / interval_steps) * 1_000
-            tokens_per_second = interval_tokens / interval_seconds
-
-            print(
-                f"train | step {step:4d} | "
-                f"loss {average_loss:.4f} | "
-                f"lr {step_learning_rate:.2e} | "
-                f"grad norm {average_grad_norm:.4f} | "
-                f"{average_step_ms:.2f} ms/step | "
-                f"{tokens_per_second:,.0f} tok/s"
-            )
-
-            interval_loss = 0.0
-            interval_grad_norm = 0.0
-            interval_seconds = 0.0
-            interval_tokens = 0
-            interval_steps = 0
-
-        if step % train_config.eval_interval == 0 or step == train_config.max_steps:
-            losses = evaluate_and_report(
-                model,
-                train_eval_loader,
-                val_loader,
-                device,
-                train_config.eval_batches,
-                step,
-            )
-            best_val_loss = save_evaluation_checkpoints(
-                model,
-                optimizer,
-                tokenizer,
-                train_config,
-                step,
-                losses,
-                best_val_loss,
-            )
+        mlflow.log_metrics(
+            {
+                "final_train_loss": average_loss,
+                "final_eval_train_loss": final_losses["train"],
+                "final_val_loss": final_losses["val"],
+                "best_val_loss": best_val_loss,
+                "best_val_step": best_val_step,
+                "total_training_time_ms": total_training_time_ms,
+                "median_time_per_step_ms": median(step_seconds_samples) * 1_000,
+                "median_tokens_per_second": median(
+                    train_loader.tokens_per_batch / seconds for seconds in step_seconds_samples
+                ),
+                "peak_accelerator_memory": peak_accelerator_memory,
+            },
+            step=train_config.max_steps,
+        )
 
 
 if __name__ == "__main__":
