@@ -57,6 +57,10 @@ python -m chatbot.generate
 
 ## Model benchmarking
 
+**Latest benchmark**
+
+![](./images/training_benchmark.png)
+
 **Training benchmark**
 
 Training experiments will be tracked as MLflow runs and identified by run ID/name, git commit, `GPTConfig`, `TrainConfig`, environment, tokenizer, dataset, and other relevant identification info.
