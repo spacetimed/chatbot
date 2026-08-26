@@ -81,40 +81,56 @@ class CausalSelfAttention(nn.Module):
 
         # at this point, each (b,t) token position has three tiny HxD grids: query, key, value grids
 
-        # key = [B,H,T,D] -> [B,H,D,T]
-        #           -2 -1 <- these dim offsets get swapped
-        # for each (b,h), compute [T,D] @ [D,T] to compare every query token
-        # against every key token; this produces one [T,T] score matrix per head
-        scores = q @ k.transpose(-2, -1)  # [B,H,T,T]
-        scores = scores * (self.head_size**-0.5)
-
-        # triangular mask prevents each token from attending to future tokens
-        scores = scores.masked_fill(
-            ~self.causal_mask[:, :, :T, :T],
-            float("-inf"),
+        # replace manual attention calculation with pytorch's optimized implementation
+        # i still kept my old comments (from the manual attention) below.
+        # pytorch's implementation can dispatch flash attention if supported
+        out = F.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            dropout_p=(self.config.dropout if self.training else 0.0),
+            is_causal=True,
         )
-
-        # softmax
-        weights = F.softmax(scores, dim=-1)
-        weights = self.attn_dropout(weights)
-
-        # use attention weights to take weighted combination of value vectors
-        out = weights @ v  # [B,H,T,D]
-
-        # restore organization where each (b,t) position contains HxD grid
-        out = out.transpose(1, 2)  # [B,T,H,D]
-
-        # before transpose: [B, H, T, D]
-        # after transpose:  [B, T, H, D]
-        #                          | /
-        #                          |/
-        # use .view to:     [B, T, C]
-        # need .contiguous() for view because transpose() changed tensor's order
-        out = out.contiguous().view(B, T, C)  # [B,T,C]
-
-        # mix information across heads, then apply residual-stream dropout
-        out = self.c_proj(out)  # [B,T,C]
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+        out = self.c_proj(out)
         out = self.residual_dropout(out)
+
+        # === old manual attention calculation ===
+        # # key = [B,H,T,D] -> [B,H,D,T]
+        # #           -2 -1 <- these dim offsets get swapped
+        # # for each (b,h), compute [T,D] @ [D,T] to compare every query token
+        # # against every key token; this produces one [T,T] score matrix per head
+        # scores = q @ k.transpose(-2, -1)  # [B,H,T,T]
+        # scores = scores * (self.head_size**-0.5)
+
+        # # triangular mask prevents each token from attending to future tokens
+        # scores = scores.masked_fill(
+        #     ~self.causal_mask[:, :, :T, :T],
+        #     float("-inf"),
+        # )
+
+        # # softmax
+        # weights = F.softmax(scores, dim=-1)
+        # weights = self.attn_dropout(weights)
+
+        # # use attention weights to take weighted combination of value vectors
+        # out = weights @ v  # [B,H,T,D]
+
+        # # restore organization where each (b,t) position contains HxD grid
+        # out = out.transpose(1, 2)  # [B,T,H,D]
+
+        # # before transpose: [B, H, T, D]
+        # # after transpose:  [B, T, H, D]
+        # #                          | /
+        # #                          |/
+        # # use .view to:     [B, T, C]
+        # # need .contiguous() for view because transpose() changed tensor's order
+        # out = out.contiguous().view(B, T, C)  # [B,T,C]
+
+        # # mix information across heads, then apply residual-stream dropout
+        # out = self.c_proj(out)  # [B,T,C]
+        # out = self.residual_dropout(out)
+        # === end manual attention calculation ===
 
         return out
 

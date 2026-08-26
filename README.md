@@ -57,10 +57,6 @@ python -m chatbot.generate
 
 ## Model benchmarking
 
-**Latest benchmark**
-
-![](./images/training_benchmark.png)
-
 **Training benchmark**
 
 Training experiments will be tracked as MLflow runs and identified by run ID/name, git commit, `GPTConfig`, `TrainConfig`, environment, tokenizer, dataset, and other relevant identification info.
@@ -100,6 +96,20 @@ median_time_per_step_ms
 median_tokens_per_second
 peak_accelerator_memory
 ```
+
+## Optimizing training
+
+**Latest benchmark**
+
+![](./images/training_benchmark.png)
+
+**Optimization 1** – `torch-sdpa` – Adding Pytorch's SDPA to speed up training with identical results.
+- I swapped my manual causal-attention implementation to Pytorch's `.scaled_dot_product_attention(...)`, and achieved the following results:
+    - Median step latency decreased from `8.278` to `7.958 ms` (`+3.87%` lower).
+    - Median throughput increased from `123.7K` to `128.7K tok/s` (`+4.02%` faster).
+    - Peak memory decreased from `50.25` to `46.91 MiB` (`+6.7%` lower)
+    - Total training time decreased from `19.98` to `19.51 s` (`+2.4%` lower).
+- While these gains are modest, this model will soon be aggressively scaled in parameter size, so this optimization provided great results and cleaned up my code. Also, achieving identical losses helped reaffirm that my previous manual calculation was correct.
 
 
 ## Optimizing the tokenizer
