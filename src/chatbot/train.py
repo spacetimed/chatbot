@@ -350,14 +350,14 @@ def main() -> None:
 
     tokenizer, train_tokens, val_tokens = prepare_data(train_config)
 
-    # model architecture
+    # model architecture (~20M param)
     model_config = GPTConfig(
         vocab_size=tokenizer.vocab_size,
-        block_size=64,
-        n_embed=64,
-        n_head=4,
-        n_layer=2,
-        dropout=0.15,
+        block_size=256,
+        n_embed=512,
+        n_head=8,
+        n_layer=6,
+        dropout=0.1,
     )
 
     # training data

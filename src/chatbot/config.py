@@ -19,8 +19,11 @@ class TrainConfig:
     dataset_config: str = "sample-10BT"
     dataset_split: str = "train"
     dataset_revision: str = "v1.0.0"
-    dataset_bytes: int = 1_000_000
-    dataset_cache: Path = Path("datasets/fineweb_edu_1000000_bytes.jsonl")
+
+    dataset_bytes: int = 50_000_000
+    dataset_cache: Path = Path(
+        "datasets/fineweb_edu_50000000_bytes.jsonl"
+    )  # todo, just make this automatic, remove this from config
 
     tokenizer_path: Path = Path("artifacts/tokenizer/python/rules.json")
 
@@ -29,10 +32,10 @@ class TrainConfig:
     checkpoint_save_best: bool = True
 
     seed: int = 1337
-    batch_size: int = 16
+    batch_size: int = 8
 
-    max_steps: int = 2_000
-    warmup_steps: int = 100
+    max_steps: int = 5_000
+    warmup_steps: int = 250
 
     log_interval: int = 100
     eval_interval: int = 250

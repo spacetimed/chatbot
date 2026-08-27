@@ -99,11 +99,11 @@ peak_accelerator_memory
 
 ## Optimizing training
 
-**Latest benchmark**
+**Latest benchmark** (exported from MLflow data)
 
 ![](./images/training_benchmark.png)
 
-**Optimization 1** – `torch-sdpa` – Adding Pytorch's SDPA to speed up training with identical results.
+**Optimization 1** – `torch-sdpa` – Added Pytorch's SDPA to speed up training with identical results.
 - I swapped my manual causal-attention implementation to Pytorch's `.scaled_dot_product_attention(...)`, and achieved the following results:
     - Median step latency decreased from `8.278` to `7.958 ms` (`+3.87%` lower).
     - Median throughput increased from `123.7K` to `128.7K tok/s` (`+4.02%` faster).
