@@ -4,6 +4,34 @@ An chatbot that visualizes different stages of an LLM. Built with privacy and ed
 
 This project is an extension of my work in the [Gradcore](https://github.com/spacetimed/gradcore) repository, where I learned, designed, and implemented various language models, finally ending with a GPT-style transformer.
 
+## Current remaining phases
+
+Adding this section here to constrain my scope a bit, and to give me some overall direction.
+
+3. *(Currently in-progress)* Model training experiments
+    - Review vocabulary size and training budget; run a few isolated experiments (e.g. mixed precision) with MLflow comparing the validation loss, throughput, and memory, etc.
+    - Select best checkpoint, document fixed-prompt generation examples + quality limitations (bounded instead of spending too long on it)
+
+4. Implement/measure/research KV caching
+    - Separate prompt processing from subsequent token generation, reusing attention keys/values in a per-request cache. Check cached and uncached logits agree within numerical tolerance.
+    - Extend MLflow to inference benchmarks: compare time to first token, generation throughput, total latency, and memory across fixed prompt/output lengths.
+
+5. Inference service
+    - Build a FastAPI streaming endpoint with one model worker, a bounded request queue, generation limits, timeouts, and cancellation that stops model work. Handle overload without blocking the API event loop.
+    - Add a minimal TypeScript UI showing streamed output and inference timings. Include health/readiness checks and structured request logs from the start.
+
+6. Deploy and instrument
+    - Containerize with Docker, deploy on one AWS EC2 instance, and store versioned checkpoint/tokenizer artifacts in S3. Record which MLflow run produced the deployed model.
+    - Use GitHub Actions for tests, builds, and releases; add a small Terraform configuration for the required infrastructure. Include HTTPS, access controls, rollback, and a shutdown procedure to control costs.
+    - Use CloudWatch for logs, dashboards, and alarms covering errors, queue depth/wait, p50/p95 latency, time to first token, and resource usage. OpenTelemetry request tracing is optional after the core service works.
+
+7. Validate and package
+    - Add integration/load tests for streaming, concurrent requests, overload, cancellation, and failure recovery. Use telemetry to explain bottlenecks and verify release/rollback behavior.
+    - Publish reproducible benchmark commands/results, an architecture diagram, deployment instructions, and a short demo. Document model limitations and measured service capacity.
+
+My current target is to finish these phases in roughly two weeks. Further tokenizer work, custom CUDA, conversational fine-tuning, continuous batching, Kubernetes, and extra databases/queues are deferred for now to prioritize what's important.
+
+
 ## Progress
 
 **Phase 0: Preliminary** — *Complete*
