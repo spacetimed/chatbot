@@ -81,7 +81,11 @@ python -m chatbot.generate
     --seed 1337 
     --temperature 0.7
 ```
-- My next goal is to design a schema for benchmarking both my model training and inference. I am incorporating **MLflow** into the stack to have a clean and modular way to archive experiments. See *Model benchmarking*.
+- I designed a training benchmark schema and integrated **MLflow** into `train.py`, so each run records the model/training configs, dataset details, losses, learning rate, gradient norm, and training speed. See *Model benchmarking*.
+- Added aggregate measurements at the end of each run (best validation loss/step, median throughput, total training time, peak memory), and a notebook to export the MLflow results into plots for this README.
+- Replaced my manual attention calculation with PyTorch's `scaled_dot_product_attention(...)`. On the small MPS benchmark, this improved training throughput by `+4.02%`, reduced median step latency by `3.87%`, and reduced peak memory by `6.7%`, with matching recorded losses. See *Optimizing training*.
+- Scaled the model from ~168K to `19.56M` parameters (6 layers, 8 heads, 512 embedding dimensions), increased context length from 64 to 256 tokens, and expanded the FineWeb-Edu corpus from 1 MB to 50 MB.
+- Ran 5,000 training steps on MPS, bringing validation loss from `7.0205` to `3.4692`. Generated text now resembles English, but still doesn't make much sense; there's more work to do on model quality before calling it a chatbot.
 
 ## Model benchmarking
 
@@ -139,6 +143,11 @@ peak_accelerator_memory
     - Total training time decreased from `19.98` to `19.51 s` (`+2.4%` lower).
 - While these gains are modest, this model will soon be aggressively scaled in parameter size, so this optimization provided great results and cleaned up my code. Also, achieving identical losses helped reaffirm that my previous manual calculation was correct.
 
+
+**Optimization 2** – `bf16-amp` – Added optional mixed-precision training.
+
+- I added BF16 autocast with an `enable_amp` flag, but on my M1 Pro (MPS), brief 500-step runs actually had ~28% lower throughput than FP32, with nearly identical validation loss.
+- For now, I am keeping FP32 locally. It was fun spending the day reading about different data types and adding support for mixed-precision, and I'll benchmark CUDA (which should have benefits) with BF16 soon.
 
 ## Optimizing the tokenizer
 

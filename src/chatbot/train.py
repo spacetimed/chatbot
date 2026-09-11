@@ -445,7 +445,12 @@ def main() -> None:
             y = y.to(device)
             optimizer.zero_grad(set_to_none=True)
 
-            _, loss = model(x, y)
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.bfloat16,  # can fetch this dynamically depending on support for cuda
+                enabled=train_config.enable_amp,
+            ):
+                _, loss = model(x, y)
 
             loss.backward()
 
