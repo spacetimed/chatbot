@@ -125,12 +125,13 @@ def prepare_data(
     if not (0.0 < config.train_split < 1.0):
         raise ValueError("train_split must be within range (0,1)")
 
+    cache_key = "_".join((config.dataset_name, config.dataset_config, config.dataset_split, config.dataset_revision)).replace("/", "--")
     documents = load_documents(
         dataset_name=config.dataset_name,
         dataset_config=config.dataset_config,
         dataset_split=config.dataset_split,
         dataset_revision=config.dataset_revision,
-        cache_path=config.dataset_cache,
+        cache_path=config.cache_path / f"{cache_key}_{config.dataset_bytes}_bytes.jsonl",
         max_bytes=config.dataset_bytes,
     )
 
@@ -269,7 +270,7 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     train_config_state = asdict(train_config)
-    train_config_state["dataset_cache"] = str(train_config.dataset_cache)
+    train_config_state["cache_path"] = str(train_config.cache_path)
     train_config_state["tokenizer_path"] = str(train_config.tokenizer_path)
     train_config_state["checkpoint_dir"] = str(train_config.checkpoint_dir)
 
@@ -357,7 +358,7 @@ def main() -> None:
         n_embed=512,
         n_head=8,
         n_layer=6,
-        dropout=0.1,
+        dropout=0.0,
     )
 
     # training data
