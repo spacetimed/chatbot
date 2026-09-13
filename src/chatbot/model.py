@@ -301,19 +301,25 @@ class GPT(nn.Module):
         temperature=1.0,
     ) -> torch.Tensor:
         if temperature <= 0:
-            raise ValueError("temperature must be positive")
+            raise ValueError("temperature must be above 0")
 
         was_training = self.training
         self.eval()
 
         # todo special token for stopping then break loop here
 
-        for _ in range(max_new_tokens):
-            idx_cond = idx[:, -self.block_size :]
+        # data flow (to jog my memory)
+        # idx: begins as [ [L] ] (so 1xL) (flattened token stream)
 
-            logits, _ = self(idx_cond)
-            logits = logits[:, -1, :]
-            logits = logits / temperature
+        for _ in range(max_new_tokens):
+            # let T = min(L, block_size:=256)
+
+            idx_cond = idx[:, -self.block_size :]  # [1,T] (essentially truncated to max size of 256)
+
+            logits, _ = self(idx_cond)  # [1,T,V]
+            # extract final token T-1's prediction. note -1 "selects" last T's V basically
+            logits = logits[:, -1, :]  # [1,V]
+            logits = logits / temperature  # temperature scaling (logit/(1/t) = logit*t)
 
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)

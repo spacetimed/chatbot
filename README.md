@@ -149,6 +149,11 @@ peak_accelerator_memory
 - I added BF16 autocast with an `enable_amp` flag, but on my M1 Pro (MPS), brief 500-step runs actually had ~28% lower throughput than FP32, with nearly identical validation loss.
 - For now, I am keeping FP32 locally. It was fun spending the day reading about different data types and adding support for mixed-precision, and I'll benchmark CUDA (which should have benefits) with BF16 soon.
 
+**Optimization 3** – `vocab-4096` – Preparing a checkpoint for inference.
+
+- I increased the vocabulary from 1,000 to 4,096 tokens (+5 special tokens), trained with my C++ tokenizer. The model is now ~21.15M parameters: 6 layers, 8 heads, 512 embedding dimensions, 256-token context, and no dropout.
+- Trained for 5,000 steps in FP32. The text still isn't very coherent, but we're going to rock with this checkpoint for inference and KV caching, and probably revisit soon.
+
 ## Optimizing the tokenizer
 
 The first two plots (`python naive`, `cpp naive`) are the naive implementations of my [Tokenizer specification](/docs/tokenizer.md). The `cpp naive` one specifically is pretty much a mirror of the Python one.
