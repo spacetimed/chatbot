@@ -5,6 +5,22 @@ import torch.nn.functional as F
 from chatbot.config import GPTConfig
 
 
+class KVCache:
+    """
+    stores kv activations for one TransformerBlock, and one generation batch
+
+    contains all attention heads
+        K: [B, H, P, D]
+        V: [B, H, P, D]
+        P = num cached token positions
+        H = n_head
+        D = n_embed // n_head
+
+    accumulates newly computed KV along the token-position axis
+    does not compute projections, store Q, or perform attention
+    """
+
+
 # start vectorized attention write to prep for GPT-2
 class CausalSelfAttention(nn.Module):
     def __init__(
@@ -59,6 +75,8 @@ class CausalSelfAttention(nn.Module):
         #   (H = n_head; D = dimensionality of each head)
         #   so each token (b,t) has an HxD grid composed from partitioning the C-vector
 
+        # todo: qkv cache, start here i think?
+
         B, T, C = x.shape  # [B,T,C] = [batch, token, n_embed]
 
         if T > self.block_size:
@@ -109,7 +127,7 @@ class CausalSelfAttention(nn.Module):
         #     float("-inf"),
         # )
 
-        # # softmax
+        # # softmax (each row is basically a probability distribution for each token idx=i relative to all preceding)
         # weights = F.softmax(scores, dim=-1)
         # weights = self.attn_dropout(weights)
 
@@ -178,7 +196,7 @@ class MLP(nn.Module):
         return x
 
 
-class Block(nn.Module):
+class TransformerBlock(nn.Module):
     def __init__(
         self,
         config: GPTConfig,
@@ -221,7 +239,7 @@ class GPT(nn.Module):
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
-        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layer)])
 
         # final normalization + vocab projection
         self.ln_f = nn.LayerNorm(self.n_embed)
