@@ -18,18 +18,7 @@ dependencies = [
 dev = [
     "pybind11>=3.0",
     "pytest",
-    "ruff",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.ruff]
-line-length = 120
-target-version = "py312"
-extend-exclude = [
-    "references",
-]
-
-[tool.ruff.format]
-skip-magic-trailing-comma = false

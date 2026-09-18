@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 from chatbot.config import GPTConfig
-from chatbot.model import GPT
+from chatbot.model import Transformer
 from chatbot.tokenizer import BPETokenizer
 
 # generate.py rewrite
@@ -49,13 +49,13 @@ def parse_args() -> argparse.Namespace:
     # soon: temperature, top-k
 
 
-def load_checkpoint(checkpoint_path: Path, device: str) -> tuple[GPT, BPETokenizer]:
+def load_checkpoint(checkpoint_path: Path, device: str) -> tuple[Transformer, BPETokenizer]:
 
     # checkpoint -> model, tokenizer
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model_config = GPTConfig(**checkpoint["config"])
-    model = GPT(model_config).to(device)
+    model = Transformer(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 

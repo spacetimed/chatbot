@@ -1,7 +1,7 @@
 import torch
 
 from chatbot.config import GPTConfig
-from chatbot.model import GPT
+from chatbot.model import Transformer
 
 # basic low-compute tests to ensure the model is functional
 
@@ -17,7 +17,7 @@ def test_model():
         n_layer=2,
         dropout=0.0,
     )
-    model = GPT(config)
+    model = Transformer(config)
     tokens = torch.randint(0, 64, (2, 9))  # 2x9 containing rand int [0,64)
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
@@ -44,7 +44,7 @@ def test_force_overfit():
         n_layer=2,
         dropout=0.0,
     )
-    model = GPT(config)
+    model = Transformer(config)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
 

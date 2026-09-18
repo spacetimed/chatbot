@@ -9,7 +9,7 @@ import torch
 
 from chatbot.config import GPTConfig, TrainConfig
 from chatbot.dataset_loader import load_documents
-from chatbot.model import GPT
+from chatbot.model import Transformer
 from chatbot.tokenizer import BPETokenizer
 from chatbot.tokenizer_driver import TokenizerIO
 
@@ -125,7 +125,9 @@ def prepare_data(
     if not (0.0 < config.train_split < 1.0):
         raise ValueError("train_split must be within range (0,1)")
 
-    cache_key = "_".join((config.dataset_name, config.dataset_config, config.dataset_split, config.dataset_revision)).replace("/", "--")
+    cache_key = "_".join(
+        (config.dataset_name, config.dataset_config, config.dataset_split, config.dataset_revision)
+    ).replace("/", "--")
     documents = load_documents(
         dataset_name=config.dataset_name,
         dataset_config=config.dataset_config,
@@ -167,7 +169,7 @@ def prepare_data(
 
 @torch.no_grad()
 def evaluate_loss(
-    model: GPT,
+    model: Transformer,
     loader: TokenBatchLoader,
     device: torch.device,
     eval_batches: int,
@@ -198,7 +200,7 @@ def evaluate_loss(
 
 
 def run_evaluation(
-    model: GPT,
+    model: Transformer,
     optimizer: torch.optim.Optimizer,
     tokenizer: BPETokenizer,
     train_loader: TokenBatchLoader,
@@ -259,7 +261,7 @@ def run_evaluation(
 
 def save_checkpoint(
     path: Path,
-    model: GPT,
+    model: Transformer,
     optimizer: torch.optim.Optimizer,
     tokenizer: BPETokenizer,
     train_config: TrainConfig,
@@ -290,7 +292,7 @@ def save_checkpoint(
 
 
 def create_optimizer(
-    model: GPT,
+    model: Transformer,
     config: TrainConfig,
 ) -> torch.optim.AdamW:
 
@@ -382,7 +384,7 @@ def main() -> None:
         model_config.block_size,
     )
 
-    model = GPT(model_config).to(device)
+    model = Transformer(model_config).to(device)
 
     optimizer = create_optimizer(
         model,

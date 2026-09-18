@@ -5,28 +5,21 @@ import torch.nn.functional as F
 from chatbot.config import GPTConfig
 
 
-class KVCache:
+class KVCache(nn.Module):
     """
-    stores kv activations for one TransformerBlock, and one generation batch
-
-    contains all attention heads
-        K: [B, H, P, D]
-        V: [B, H, P, D]
-        P = num cached token positions
-        H = n_head
-        D = n_embed // n_head
-
-    accumulates newly computed KV along the token-position axis
-    does not compute projections, store Q, or perform attention
+    stores kv activations for one TransformerBlock
+    stores a copy of K,V ; each TransformerBlock forward pass will fetch/update
+    no computation. just a datastore
     """
+
+    def __init__(self):
+
+        super().__init__()
 
 
 # start vectorized attention write to prep for GPT-2
-class CausalSelfAttention(nn.Module):
-    def __init__(
-        self,
-        config: GPTConfig,
-    ) -> None:
+class Attention(nn.Module):
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
 
         self.config = config
@@ -53,6 +46,8 @@ class CausalSelfAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.residual_dropout = nn.Dropout(config.dropout)
 
+        self.kv_cache = KVCache()
+
         mask = torch.tril(torch.ones(config.block_size, config.block_size, dtype=torch.bool))
 
         # 4 dimensional mask: [1,1,block_size,block_size]
@@ -61,43 +56,27 @@ class CausalSelfAttention(nn.Module):
             mask.view(1, 1, config.block_size, config.block_size),
         )
 
-    def forward(
-        self,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
-        # vectorized QKV summary:
-        #   start with [B,T,C] (each (b,t) position contains an n_embed vector)
-        #   pass into linear layer to produce [B,T,3C]
-        #   (each 3C vector contains concatenated q,k,v vectors)
-        #   unpack that [B,T,3C] tensor into three [B,T,C] tensors
-        #   (just de-concatenating q, k, and v)
-        #   separate each C component according to C=HxD
-        #   (H = n_head; D = dimensionality of each head)
-        #   so each token (b,t) has an HxD grid composed from partitioning the C-vector
 
-        # todo: qkv cache, start here i think?
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape # [B,T,C] = [batch, token, n_embed]
 
-        B, T, C = x.shape  # [B,T,C] = [batch, token, n_embed]
-
-        if T > self.block_size:
-            raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
+        if T > self.block_size: raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
 
         # concatenated QKV vector for each (b,t) position after the linear layer.
-        qkv = self.c_attn(x)  # [B,T,3C]
+        qkv = self.c_attn(x) # [B,T,3C] concatenated q,k,v
+        q,k,v = qkv.split(self.n_embed, dim=-1) # 3x[B,T,C] (partition qkv from concatenated vectors)
 
-        # extract Q, K, and V from the three C-sized chunks of 3C.
-        q, k, v = qkv.split(self.n_embed, dim=-1)  # each is [B,T,C]
+        q = q.view(B, T, self.n_head, self.head_size) # [B,T,H,D] -> each (b,t) now contains [HxD] s.t. each row of H contains D vec
+        k = k.view(B, T, self.n_head, self.head_size) # [B,T,H,D]
+        v = v.view(B, T, self.n_head, self.head_size) # [B,T,H,D]
 
-        q = q.view(B, T, self.n_head, self.head_size)  # [B,T,H,D]
-        q = q.transpose(1, 2)  # [B,H,T,D]
+        q,k,v = map(lambda x: x.transpose(1,2), (q,k,v)) # from gpt-fast; quite succinct [B,T,H,D] -> [B,H,T,D]
 
-        k = k.view(B, T, self.n_head, self.head_size)  # [B,T,H,D]
-        k = k.transpose(1, 2)  # [B,H,T,D]
-
-        v = v.view(B, T, self.n_head, self.head_size)  # [B,T,H,D]
-        v = v.transpose(1, 2)  # [B,H,T,D]
-
-        # at this point, each (b,t) token position has three tiny HxD grids: query, key, value grids
+        # kvcache: extend K,V based off window of history
+        if T == 1: # inference
+            k,v = self.kv_cache.extend(k,v)
+        else:
+            self.kv_cache.store(k,v)
 
         # replace manual attention calculation with pytorch's optimized implementation
         # i still kept my old comments (from the manual attention) below.
@@ -203,7 +182,7 @@ class TransformerBlock(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.sa = CausalSelfAttention(config)
+        self.sa = Attention(config)
         self.mlp = MLP(config)
 
         self.ln1 = nn.LayerNorm(config.n_embed)
@@ -218,11 +197,8 @@ class TransformerBlock(nn.Module):
         return x
 
 
-class GPT(nn.Module):
-    def __init__(
-        self,
-        config: GPTConfig,
-    ) -> None:
+class Transformer(nn.Module):
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
 
         # constants
@@ -239,7 +215,8 @@ class GPT(nn.Module):
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
-        self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layer)])
+        # self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layer)])
+        self.blocks = nn.ModuleList(TransformerBlock(config) for _ in range(config.n_layer))
 
         # final normalization + vocab projection
         self.ln_f = nn.LayerNorm(self.n_embed)
