@@ -9,12 +9,22 @@ class KVCache(nn.Module):
     """
     stores kv activations for one TransformerBlock
     stores a copy of K,V ; each TransformerBlock forward pass will fetch/update
-    no computation. just a datastore
+    no computation. just a datastore. first pass populates empty cache
     """
 
+    # first attempt
     def __init__(self):
+          super().__init__()
+          self.register_buffer("k", None, persistent=False)
+          self.register_buffer("v", None, persistent=False)
 
-        super().__init__()
+    def extend(self, k, v):
+        self.k = k if self.k is None else torch.cat((self.k, k), dim=2)
+        self.v = v if self.v is None else torch.cat((self.v, v), dim=2)
+        return self.k, self.v
+
+    def reset(self):
+        self.k = self.v = None
 
 
 # start vectorized attention write to prep for GPT-2
@@ -46,7 +56,7 @@ class Attention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.residual_dropout = nn.Dropout(config.dropout)
 
-        self.kv_cache = KVCache()
+        self.kv_cache = None
 
         mask = torch.tril(torch.ones(config.block_size, config.block_size, dtype=torch.bool))
 
@@ -72,11 +82,12 @@ class Attention(nn.Module):
 
         q,k,v = map(lambda x: x.transpose(1,2), (q,k,v)) # from gpt-fast; quite succinct [B,T,H,D] -> [B,H,T,D]
 
-        # kvcache: extend K,V based off window of history
-        if T == 1: # inference
+        # kv cache: extend K,V based off window of history
+        #  cache disabled: leave k,v unchanged
+        #  cache enabled + empty: store current k,v
+        #  cache enabled + populated: replace local k,v with extended history
+        if self.kv_cache is not None:
             k,v = self.kv_cache.extend(k,v)
-        else:
-            self.kv_cache.store(k,v)
 
         # replace manual attention calculation with pytorch's optimized implementation
         # i still kept my old comments (from the manual attention) below.
@@ -134,10 +145,7 @@ class Attention(nn.Module):
 
 # replace old FeedForward class
 class MLP(nn.Module):
-    def __init__(
-        self,
-        config: GPTConfig,
-    ) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
 
         # fully-connected expansion layer: expands each token's hidden representation from C -> 4C features
@@ -176,10 +184,7 @@ class MLP(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(
-        self,
-        config: GPTConfig,
-    ) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
 
         self.sa = Attention(config)
@@ -188,10 +193,7 @@ class TransformerBlock(nn.Module):
         self.ln1 = nn.LayerNorm(config.n_embed)
         self.ln2 = nn.LayerNorm(config.n_embed)
 
-    def forward(
-        self,
-        x,
-    ) -> torch.Tensor:
+    def forward(self, x) -> torch.Tensor:
         x = x + self.sa(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
@@ -229,10 +231,7 @@ class Transformer(nn.Module):
 
         self.apply(self._init_weights)
 
-    def _init_weights(
-        self,
-        module: nn.Module,
-    ) -> None:
+    def _init_weights(self, module: nn.Module) -> None:
 
         if isinstance(module, nn.Linear):
             std = 0.02  # gpt-2
@@ -258,11 +257,7 @@ class Transformer(nn.Module):
                 std=0.02,
             )
 
-    def forward(
-        self,
-        idx,
-        targets=None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(self, idx, targets=None) -> tuple[torch.Tensor, torch.Tensor | None]:
         _, T = idx.shape
 
         if T > self.block_size:
@@ -273,7 +268,7 @@ class Transformer(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))  # [T,C]
 
         x = tok_emb + pos_emb  # [B,T,C]
-        x = self.blocks(x)  # [B,T,C]
+        for block in self.blocks: x = block(x) # [B,T,C] ; sequentially propagate through TransformerBlock
         x = self.ln_f(x)  # [B,T,C]
 
         logits = self.lm_head(x)  # [B,T,vocab_size]
@@ -289,12 +284,7 @@ class Transformer(nn.Module):
         return logits, loss
 
     @torch.no_grad()
-    def generate(
-        self,
-        idx,
-        max_new_tokens,
-        temperature=1.0,
-    ) -> torch.Tensor:
+    def generate(self, idx, max_new_tokens, temperature=1.0) -> torch.Tensor:
         if temperature <= 0:
             raise ValueError("temperature must be above 0")
 
