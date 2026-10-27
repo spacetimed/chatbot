@@ -7,6 +7,9 @@ from chatbot.config import GPTConfig
 from chatbot.model import Transformer
 from chatbot.tokenizer import BPETokenizer
 
+from time import perf_counter
+import mlflow
+
 # generate.py rewrite
 
 # target usage:
@@ -28,13 +31,13 @@ from chatbot.tokenizer import BPETokenizer
 
 
 def get_device():
-    if torch.cuda.is_available():
-        return "cuda"
-    elif torch.backends.mps.is_available():
-        return "mps"
-    else:
-        return "cpu"
+    if torch.cuda.is_available(): return "cuda"
+    elif torch.backends.mps.is_available(): return "mps"
+    else: return "cpu"
 
+def synchronize(device):
+    if device == "mps": torch.mps.synchronize()
+    elif device == "cuda": torch.cuda.synchronize()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="load model weights from checkpoint and generate text from a prompt")
@@ -45,10 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--temperature", type=float, required=False, default=1.0)
     parser.add_argument("--disable-cache", action="store_true")
+    parser.add_argument("--experiment", default="chatbot-inference-default")
 
     return parser.parse_args()
     # soon: temperature, top-k
-
 
 def load_checkpoint(checkpoint_path: Path, device: str) -> tuple[Transformer, BPETokenizer]:
 
@@ -123,13 +126,40 @@ def main():
         device=device,
     )
 
-    generated = generate(
-        model, 
-        args,
-        context, 
-        max_new_tokens=args.tokens, 
-        temperature=args.temperature
-    )
+    mlflow.set_tracking_uri("http://localhost:5001")
+    mlflow.set_experiment(args.experiment)
+
+    with mlflow.start_run(run_name="uncached" if args.disable_cache else "cached"):
+
+        # inference mlflow logging
+        mlflow.log_params({
+            "checkpoint": str(args.checkpoint),
+            "device": device,
+            "use_cache": not args.disable_cache,
+            "prompt_tokens": context.size(1),
+            "output_tokens": args.tokens,
+            "temperature": args.temperature,
+            "seed": args.seed,
+            "prompt": args.prompt,
+        })
+
+        synchronize(device)
+        start = perf_counter()
+        generated = generate(
+            model, 
+            args,
+            context, 
+            max_new_tokens=args.tokens, 
+            temperature=args.temperature
+        )
+        synchronize(device)
+        elapsed = perf_counter() - start # seconds
+
+        mlflow.log_metrics({
+            "generation_time_ms": elapsed * 1000,
+            "output_tokens_per_second": args.tokens / elapsed,
+        })
+
     output_tokens = generated[0].tolist()
     output_text = tokenizer.decode(output_tokens)
 

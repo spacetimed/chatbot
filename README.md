@@ -8,14 +8,6 @@ This project is an extension of my work in the [Gradcore](https://github.com/spa
 
 Adding this section here to constrain my scope a bit, and to give me some overall direction.
 
-3. *(Currently in-progress)* Model training experiments
-    - Review vocabulary size and training budget; run a few isolated experiments (e.g. mixed precision) with MLflow comparing the validation loss, throughput, and memory, etc.
-    - Select best checkpoint, document fixed-prompt generation examples + quality limitations (bounded instead of spending too long on it)
-
-4. Implement/measure/research KV caching
-    - Separate prompt processing from subsequent token generation, reusing attention keys/values in a per-request cache. Check cached and uncached logits agree within numerical tolerance.
-    - Extend MLflow to inference benchmarks: compare time to first token, generation throughput, total latency, and memory across fixed prompt/output lengths.
-
 5. Inference service
     - Build a FastAPI streaming endpoint with one model worker, a bounded request queue, generation limits, timeouts, and cancellation that stops model work. Handle overload without blocking the API event loop.
     - Add a minimal TypeScript UI showing streamed output and inference timings. Include health/readiness checks and structured request logs from the start.
@@ -220,7 +212,11 @@ All plots below the first two are progressive iterations of my C++ tokenizer opt
 * For the C++ decoder, I now preserve the token IDs as a contiguous NumPy `uint32` array. The pybind11 binding exposes its underlying buffer to C++ as a `std::span`, which is a lightweight view over the existing memory rather than another owned copy.
 * Together, these changes improved decoding throughput from `95.75 MB/s` to `252.02 MB/s`, a `+163.2%` throughput improvement.
 
+## Optimizing inference
 
+I added **KV caching** in `model.py` so generation processes the full prompt once, then only the newest token per step. In a single MPS run per mode (5-token prompt, 100-token output), throughput increased by `99.2%` (`1.99x`), and latency dropped by `49.8%`.
+
+![](./images/inference_benchmark.png)
 
 ## Brainstorming
 
