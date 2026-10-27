@@ -69,3 +69,30 @@ def test_force_overfit():
         f"but loss changed from {initial_loss_value:.4f} "
         f"to {final_loss_value:.4f}"
     )
+
+@torch.no_grad()
+def test_kv_cache():
+    torch.manual_seed(1337)
+    config = GPTConfig(
+        vocab_size=64,
+        block_size=16,
+        n_embed=32,
+        n_head=4,
+        n_layer=2,
+        dropout=0.0,
+    )
+    model = Transformer(config).eval()
+    tokens = torch.randint(0, 64, (1, 8))
+
+    expected, _ = model(tokens)
+
+    model.enable_caches()
+    prompt_logits, _ = model(tokens[:, :4])
+    outputs = [prompt_logits]
+
+    for position in range(4, tokens.size(1)):
+        logits, _ = model(tokens[:, position:position + 1])
+        outputs.append(logits)
+
+    actual = torch.cat(outputs, dim=1)
+    torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-5)

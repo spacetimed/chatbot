@@ -63,6 +63,41 @@ def load_checkpoint(checkpoint_path: Path, device: str) -> tuple[Transformer, BP
 
     return model, tokenizer
 
+@torch.no_grad()
+def generate(model: Transformer, idx, max_new_tokens, temperature=1.0) -> torch.Tensor:
+
+    if temperature <= 0: raise ValueError("temperature must be above 0")
+    if idx.size(1) + max_new_tokens > model.block_size: raise ValueError("request exceeds context limit")
+
+    was_training = model.training
+    model.eval()
+
+    # todo special token for stopping then break loop here
+
+    # data flow (to jog my memory)
+    # idx: begins as [ [L] ] (so 1xL) (flattened token stream)
+
+    # enable kv caches
+    model.enable_caches()
+
+    for i in range(max_new_tokens):
+        # let T = min(L, block_size:=256)
+
+        idx_cond = idx[:, -model.block_size:] if i==0 else idx[:,-1:] # [1,T] if first pass, [1,1] else with kv cache
+
+        logits, _ = model(idx_cond)  # [1,T,V]
+        # extract final token T-1's prediction. note -1 "selects" last T's V basically
+        logits = logits[:, -1, :]  # [1,V]
+        logits = logits / temperature  # temperature scaling (logit/(1/t) = logit*t)
+
+        probs = torch.nn.functional.softmax(logits, dim=-1)
+        idx_next = torch.multinomial(probs, num_samples=1)
+
+        idx = torch.cat((idx, idx_next), dim=1)
+
+    if was_training: model.train()
+
+    return idx
 
 def main():
 
@@ -74,11 +109,12 @@ def main():
     torch.manual_seed(args.seed)
 
     # load checkpoint, ensure exists
+    model: Transformer
+    tokenizer: BPETokenizer
     model, tokenizer = load_checkpoint(args.checkpoint, device)
 
     prompt_tokens = tokenizer.encode(args.prompt)
-    if not prompt_tokens:
-        raise ValueError("prompt must produce at least one token")
+    if not prompt_tokens: raise ValueError("prompt must produce at least one token")
 
     context = torch.tensor(
         [prompt_tokens],
@@ -86,14 +122,12 @@ def main():
         device=device,
     )
 
-    generated = model.generate(context, max_new_tokens=args.tokens, temperature=args.temperature)
-
+    generated = generate(model, context, max_new_tokens=args.tokens, temperature=args.temperature)
     output_tokens = generated[0].tolist()
     output_text = tokenizer.decode(output_tokens)
 
     print(f"device: {device}")
     print(output_text)
-
 
 if __name__ == "__main__":
     main()

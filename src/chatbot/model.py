@@ -56,7 +56,7 @@ class Attention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.residual_dropout = nn.Dropout(config.dropout)
 
-        self.kv_cache = None
+        self.kv_cache: None|KVCache = None
 
         mask = torch.tril(torch.ones(config.block_size, config.block_size, dtype=torch.bool))
 
@@ -86,8 +86,7 @@ class Attention(nn.Module):
         #  cache disabled: leave k,v unchanged
         #  cache enabled + empty: store current k,v
         #  cache enabled + populated: replace local k,v with extended history
-        if self.kv_cache is not None:
-            k,v = self.kv_cache.extend(k,v)
+        if self.kv_cache is not None: k,v = self.kv_cache.extend(k,v)
 
         # replace manual attention calculation with pytorch's optimized implementation
         # i still kept my old comments (from the manual attention) below.
@@ -97,48 +96,11 @@ class Attention(nn.Module):
             key=k,
             value=v,
             dropout_p=(self.config.dropout if self.training else 0.0),
-            is_causal=True,
+            is_causal=(self.kv_cache is None or T > 1),
         )
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         out = self.c_proj(out)
         out = self.residual_dropout(out)
-
-        # === old manual attention calculation ===
-        # # key = [B,H,T,D] -> [B,H,D,T]
-        # #           -2 -1 <- these dim offsets get swapped
-        # # for each (b,h), compute [T,D] @ [D,T] to compare every query token
-        # # against every key token; this produces one [T,T] score matrix per head
-        # scores = q @ k.transpose(-2, -1)  # [B,H,T,T]
-        # scores = scores * (self.head_size**-0.5)
-
-        # # triangular mask prevents each token from attending to future tokens
-        # scores = scores.masked_fill(
-        #     ~self.causal_mask[:, :, :T, :T],
-        #     float("-inf"),
-        # )
-
-        # # softmax (each row is basically a probability distribution for each token idx=i relative to all preceding)
-        # weights = F.softmax(scores, dim=-1)
-        # weights = self.attn_dropout(weights)
-
-        # # use attention weights to take weighted combination of value vectors
-        # out = weights @ v  # [B,H,T,D]
-
-        # # restore organization where each (b,t) position contains HxD grid
-        # out = out.transpose(1, 2)  # [B,T,H,D]
-
-        # # before transpose: [B, H, T, D]
-        # # after transpose:  [B, T, H, D]
-        # #                          | /
-        # #                          |/
-        # # use .view to:     [B, T, C]
-        # # need .contiguous() for view because transpose() changed tensor's order
-        # out = out.contiguous().view(B, T, C)  # [B,T,C]
-
-        # # mix information across heads, then apply residual-stream dropout
-        # out = self.c_proj(out)  # [B,T,C]
-        # out = self.residual_dropout(out)
-        # === end manual attention calculation ===
 
         return out
 
@@ -203,7 +165,7 @@ class Transformer(nn.Module):
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
 
-        # constants
+        # unpack config
         self.config = config
         self.vocab_size = config.vocab_size
         self.block_size = config.block_size
@@ -217,8 +179,7 @@ class Transformer(nn.Module):
         self.position_embedding_table = nn.Embedding(self.block_size, self.n_embed)
 
         # transformer blocks; transformer -> (MHA -> [SHA, ...]) + FF)
-        # self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layer)])
-        self.blocks = nn.ModuleList(TransformerBlock(config) for _ in range(config.n_layer))
+        self.blocks = nn.ModuleList(TransformerBlock(config) for _ in range(self.n_layer))
 
         # final normalization + vocab projection
         self.ln_f = nn.LayerNorm(self.n_embed)
@@ -230,6 +191,9 @@ class Transformer(nn.Module):
         self.lm_head.weight = self.token_embedding_table.weight
 
         self.apply(self._init_weights)
+
+    def enable_caches(self) -> None:
+        for tb in self.blocks: tb.sa.kv_cache = KVCache()
 
     def _init_weights(self, module: nn.Module) -> None:
 
@@ -260,12 +224,18 @@ class Transformer(nn.Module):
     def forward(self, idx, targets=None) -> tuple[torch.Tensor, torch.Tensor | None]:
         _, T = idx.shape
 
-        if T > self.block_size:
-            raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
 
         # idx: [B,T]
         tok_emb = self.token_embedding_table(idx)  # [B,T,C]
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))  # [T,C]
+
+        pos_offset = 0
+
+        if self.blocks[0].sa.kv_cache and self.blocks[0].sa.kv_cache.k is not None: # cache enabled and non-empty
+            pos_offset = self.blocks[0].sa.kv_cache.k.size(2) # cache size
+
+        if pos_offset+T > self.block_size: raise ValueError(f"sequence length {T} exceeds block_size {self.block_size}")
+
+        pos_emb = self.position_embedding_table(torch.arange(pos_offset, pos_offset+T, device=idx.device))  # [T,C]
 
         x = tok_emb + pos_emb  # [B,T,C]
         for block in self.blocks: x = block(x) # [B,T,C] ; sequentially propagate through TransformerBlock
@@ -282,36 +252,3 @@ class Transformer(nn.Module):
             loss = F.cross_entropy(logits_flat, targets_flat)
 
         return logits, loss
-
-    @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0) -> torch.Tensor:
-        if temperature <= 0:
-            raise ValueError("temperature must be above 0")
-
-        was_training = self.training
-        self.eval()
-
-        # todo special token for stopping then break loop here
-
-        # data flow (to jog my memory)
-        # idx: begins as [ [L] ] (so 1xL) (flattened token stream)
-
-        for _ in range(max_new_tokens):
-            # let T = min(L, block_size:=256)
-
-            idx_cond = idx[:, -self.block_size :]  # [1,T] (essentially truncated to max size of 256)
-
-            logits, _ = self(idx_cond)  # [1,T,V]
-            # extract final token T-1's prediction. note -1 "selects" last T's V basically
-            logits = logits[:, -1, :]  # [1,V]
-            logits = logits / temperature  # temperature scaling (logit/(1/t) = logit*t)
-
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        if was_training:
-            self.train()
-
-        return idx
