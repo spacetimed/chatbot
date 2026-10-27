@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokens", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--temperature", type=float, required=False, default=1.0)
+    parser.add_argument("--disable-cache", action="store_true")
 
     return parser.parse_args()
     # soon: temperature, top-k
@@ -64,7 +65,7 @@ def load_checkpoint(checkpoint_path: Path, device: str) -> tuple[Transformer, BP
     return model, tokenizer
 
 @torch.no_grad()
-def generate(model: Transformer, idx, max_new_tokens, temperature=1.0) -> torch.Tensor:
+def generate(model: Transformer, args: argparse.Namespace, idx, max_new_tokens, temperature=1.0) -> torch.Tensor:
 
     if temperature <= 0: raise ValueError("temperature must be above 0")
     if idx.size(1) + max_new_tokens > model.block_size: raise ValueError("request exceeds context limit")
@@ -77,13 +78,13 @@ def generate(model: Transformer, idx, max_new_tokens, temperature=1.0) -> torch.
     # data flow (to jog my memory)
     # idx: begins as [ [L] ] (so 1xL) (flattened token stream)
 
-    # enable kv caches
-    model.enable_caches()
+    # enable kv caches by default, unless otherwise disabled through --disable-cache
+    if not args.disable_cache: model.enable_caches() # todo disable should clear cache for later passes on same checkpoint
 
     for i in range(max_new_tokens):
         # let T = min(L, block_size:=256)
 
-        idx_cond = idx[:, -model.block_size:] if i==0 else idx[:,-1:] # [1,T] if first pass, [1,1] else with kv cache
+        idx_cond = idx[:, -model.block_size:] if (i==0 or args.disable_cache) else idx[:,-1:] # [1,T] if first pass, [1,1] else with kv cache
 
         logits, _ = model(idx_cond)  # [1,T,V]
         # extract final token T-1's prediction. note -1 "selects" last T's V basically
@@ -122,7 +123,13 @@ def main():
         device=device,
     )
 
-    generated = generate(model, context, max_new_tokens=args.tokens, temperature=args.temperature)
+    generated = generate(
+        model, 
+        args,
+        context, 
+        max_new_tokens=args.tokens, 
+        temperature=args.temperature
+    )
     output_tokens = generated[0].tolist()
     output_text = tokenizer.decode(output_tokens)
 
