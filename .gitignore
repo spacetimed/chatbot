@@ -11,7 +11,6 @@ references/*
 /src/chatbot/_tokenizer_cpp*.so
 
 # project-specific
-artifacts/*
 checkpoints/*
 logs/*
 datasets/*
@@ -29,3 +28,8 @@ __pycache__/
 /mlflow.db
 /mlartifacts/
 /mlruns/
+
+/artifacts/**
+!/artifacts/tokenizer/
+!/artifacts/tokenizer/vocab-50000/
+!/artifacts/tokenizer/vocab-50000/rules.json

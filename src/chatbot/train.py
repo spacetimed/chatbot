@@ -242,6 +242,7 @@ def run_evaluation(
             step,
             losses,
             best_val_loss,
+            best_val_step,
         )
 
     if train_config.checkpoint_save_best and is_best:
@@ -254,6 +255,7 @@ def run_evaluation(
             step,
             losses,
             best_val_loss,
+            best_val_step,
         )
 
     return losses, best_val_loss, best_val_step
@@ -268,6 +270,7 @@ def save_checkpoint(
     step: int,
     losses: dict[str, float],
     best_val_loss: float,
+    best_val_step: int,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -275,6 +278,7 @@ def save_checkpoint(
     train_config_state["cache_path"] = str(train_config.cache_path)
     train_config_state["tokenizer_path"] = str(train_config.tokenizer_path)
     train_config_state["checkpoint_dir"] = str(train_config.checkpoint_dir)
+    train_config_state["resume_from"] = str(train_config.resume_from) if train_config.resume_from else None
 
     checkpoint = {
         "checkpoint_version": 1,
@@ -286,6 +290,7 @@ def save_checkpoint(
         "step": step,
         "losses": losses,
         "best_val_loss": best_val_loss,
+        "best_val_step": best_val_step,
     }
 
     torch.save(checkpoint, path)
@@ -351,17 +356,21 @@ def main() -> None:
     torch.manual_seed(train_config.seed)
     device = get_device()
 
+    # load resume checkpoint if exists, else start from 0
+    checkpoint = torch.load(train_config.resume_from, map_location=device) if train_config.resume_from else None
+    start_step = checkpoint["step"] if checkpoint is not None else 0
+    if not (0 <= start_step < train_config.max_steps):
+        raise ValueError("max_steps must be greater than the checkpoint step")
+
     tokenizer, train_tokens, val_tokens = prepare_data(train_config)
 
-    # model architecture (~20M param)
-    model_config = GPTConfig(
-        vocab_size=tokenizer.vocab_size,
-        block_size=256,
-        n_embed=512,
-        n_head=8,
-        n_layer=6,
-        dropout=0.0,
-    )
+    model_config = GPTConfig(**checkpoint["config"]) if checkpoint is not None else GPTConfig(vocab_size=tokenizer.vocab_size)
+    if checkpoint is not None:
+        if tokenizer.to_dict() != checkpoint["tokenizer"]:
+            raise ValueError("resume requires the same tokenizer")
+        data_settings = ("dataset_name", "dataset_config", "dataset_split", "dataset_revision", "dataset_bytes", "train_split", "batch_size")
+        if any(getattr(train_config, key) != checkpoint["train_config"][key] for key in data_settings):
+            raise ValueError("resume requires the same dataset settings and batch size")
 
     # training data
     train_loader = TokenBatchLoader(
@@ -384,12 +393,18 @@ def main() -> None:
         model_config.block_size,
     )
 
+    # create model/optimizer
     model = Transformer(model_config).to(device)
-
     optimizer = create_optimizer(
         model,
         train_config,
     )
+
+    if checkpoint is not None:
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        batches_per_pass = (len(train_tokens) - 1) // train_loader.tokens_per_batch
+        train_loader.current_position = (start_step % batches_per_pass) * train_loader.tokens_per_batch
 
     # information/specs
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
@@ -408,18 +423,23 @@ def main() -> None:
         )
 
         # measure step zero
-        final_losses, best_val_loss, best_val_step = run_evaluation(
-            model,
-            optimizer,
-            tokenizer,
-            train_eval_loader,
-            val_loader,
-            device,
-            train_config,
-            step=0,
-            best_val_loss=float("inf"),
-            best_val_step=0,
-        )
+        if checkpoint is None:
+            final_losses, best_val_loss, best_val_step = run_evaluation(
+                model,
+                optimizer,
+                tokenizer,
+                train_eval_loader,
+                val_loader,
+                device,
+                train_config,
+                step=0,
+                best_val_loss=float("inf"),
+                best_val_step=0,
+            )
+        else:
+            final_losses = checkpoint["losses"]
+            best_val_loss = checkpoint["best_val_loss"]
+            best_val_step = checkpoint.get("best_val_step", start_step if final_losses["val"] == best_val_loss else -1)
 
         if train_config.log_interval <= 0:
             raise ValueError("log_interval must be positive")
@@ -438,7 +458,9 @@ def main() -> None:
         # training loop
         training_start = perf_counter()
         model.train()
-        for step in range(1, train_config.max_steps + 1):
+
+        for step in range(start_step + 1, train_config.max_steps + 1):
+        #for step in range(1, train_config.max_steps + 1):
             # synchronize before starting so previous accelerator work is not included
             synchronize_device(device)
             step_start = perf_counter()

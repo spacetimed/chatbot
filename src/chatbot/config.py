@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# loosely base params off karpathy ~120M GPT-2 remake
 @dataclass
 class GPTConfig:
     vocab_size: int
-    block_size: int
-    n_embed: int
-    n_head: int
-    n_layer: int
+    block_size: int = 1024 # context
+    n_embed: int = 768
+    n_head: int = 12
+    n_layer: int = 12
     dropout: float = 0.0
 
 
@@ -23,11 +24,14 @@ class TrainConfig:
     dataset_bytes: int = 50_000_000
     cache_path: Path = Path("tmp")
 
-    tokenizer_path: Path = Path("artifacts/tokenizer/vocab-4096/rules.json")
+    tokenizer_path: Path = Path("artifacts/tokenizer/vocab-50000/rules.json")
 
-    checkpoint_dir: Path = Path("checkpoints/vocab-4096-fp32-no-dropout")
+    checkpoint_dir: Path = Path("checkpoints/gpt2-pretrain")
     checkpoint_save_latest: bool = True
     checkpoint_save_best: bool = True
+
+    # resume from checkpoint (optional)
+    resume_from: None|Path = None
 
     seed: int = 1337
     batch_size: int = 8
@@ -54,7 +58,7 @@ class TrainConfig:
     # MLflow integration
     mlflow_tracking_uri: str = "http://localhost:5001"
     mlflow_experiment_name: str = "chatbot-training"
-    mlflow_run_name: str | None = "vocab-4096-fp32-no-dropout-5000-steps"
+    mlflow_run_name: str | None = "gpt2-pretrain"
 
     # mixed-precision arithmetic
     enable_amp: bool = False

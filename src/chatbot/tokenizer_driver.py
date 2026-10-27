@@ -111,6 +111,9 @@ def run_train(
     args: argparse.Namespace,
 ) -> None:
 
+    if not (0 < args.train_split <= 1):
+        raise ValueError("train_split must be within range (0,1]")
+
     Tokenizer = get_tokenizer_implementation(args.language)
 
     output_path = args.output or artifact_path(args.language, "rules.json")
@@ -123,6 +126,9 @@ def run_train(
         cache_path=dataset_cache,
         max_bytes=args.dataset_bytes,
     )
+    documents = documents[:int(len(documents) * args.train_split)]
+    if not documents:
+        raise ValueError("train_split must include at least one document")
     text = "\n\n".join(documents)
     corpus = text.encode("utf-8")
     input_bytes = len(corpus)
@@ -341,6 +347,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--dataset-cache",
         type=Path,
         help="existing or new JSONL cache path (default includes dataset byte limit)",
+    )
+    train_parser.add_argument(
+        "--train-split",
+        type=float,
+        default=1.0,
+        help="fraction of documents to train on, taken from the start of the corpus",
     )
     train_parser.add_argument(
         "--output",
